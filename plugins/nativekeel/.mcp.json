@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nativekeel": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/node_modules/nativekeel/bin/nativekeel.js", "mcp"]
+    }
+  }
+}

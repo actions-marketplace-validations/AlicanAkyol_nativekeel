@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>What's new · NativeKeel</title>
-<meta name="description" content="Every NativeKeel release: new checks, fewer false alarms, and what we learned from real React Native upgrades and 450+ open-source apps.">
+<meta name="description" content="Every NativeKeel release: new checks, fewer false alarms, and what we learned from real React Native upgrades and 850+ open-source apps.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#0b5d55">
@@ -13,14 +13,14 @@
 <meta property="og:site_name" content="NativeKeel">
 <meta property="og:url" content="https://nativekeel.com/changelog">
 <meta property="og:title" content="What&#x27;s new · NativeKeel">
-<meta property="og:description" content="Every NativeKeel release: new checks, fewer false alarms, and what we learned from real React Native upgrades and 450+ open-source apps.">
+<meta property="og:description" content="Every NativeKeel release: new checks, fewer false alarms, and what we learned from real React Native upgrades and 850+ open-source apps.">
 <meta property="og:image" content="https://nativekeel.com/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="NativeKeel: npx nativekeel, a free health check for React Native and Expo apps">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="What&#x27;s new · NativeKeel">
-<meta name="twitter:description" content="Every NativeKeel release: new checks, fewer false alarms, and what we learned from real React Native upgrades and 450+ open-source apps.">
+<meta name="twitter:description" content="Every NativeKeel release: new checks, fewer false alarms, and what we learned from real React Native upgrades and 850+ open-source apps.">
 <meta name="twitter:image" content="https://nativekeel.com/og.png">
 <style>
 :root{--bg:#fbfaf7;--text:#15171b;--muted:#5d6470;--accent:#0b5d55;--line:#e3e1db;--card:#ffffff}
@@ -38,7 +38,256 @@ h1{font-size:30px;margin:0 0 4px}a{color:var(--accent)}p,li{color:var(--muted)}
 <body><main>
 <p><a href="index.html">← NativeKeel</a></p>
 <h1>What's new</h1>
-<p>Every release, in plain words. Most changes come from two places: real upgrades we do, and scanning 650+ open-source React Native and Expo apps, more every week, to find what the tool gets wrong. Run <code>npx nativekeel</code> to always get the latest. Full notes on <a href="https://github.com/AlicanAkyol/nativekeel/releases">GitHub</a>.</p>
+<p>Every release, in plain words. Most changes come from two places: real upgrades we do, and scanning 850+ open-source React Native and Expo apps, more every week, to find what the tool gets wrong. Run <code>npx nativekeel</code> to always get the latest. Full notes on <a href="https://github.com/AlicanAkyol/nativekeel/releases">GitHub</a>.</p>
+
+<div class="rel"><h2>0.1.88</h2><p class="date">16 October 2026</p>
+<ul>
+<li><span class="tag">New check</span><b>Libraries that stop the iOS build on React Native 0.87.</b> React Native 0.87 serves its iOS headers from XCFrameworks, so a library that writes <code>#import "RCTBridge.h"</code> instead of <code>#import &lt;React/RCTBridge.h&gt;</code> fails with "file not found". NativeKeel now reads the iOS code of your installed libraries and your own: before the upgrade it lists them as work for 0.87, after it as the reason the build fails. We compiled every React Native header both ways to know exactly which imports break; among the 248 most downloaded native libraries it finds 5, including react-native-date-picker, @react-native-menu/menu and react-native-bottom-tabs. <a href="/fix/rctcomponent-h-file-not-found-react-native-0-87">Fix and workaround</a>.</li>
+<li><span class="tag">Crash</span>On React Native 0.87 and later, code that still uses <code>InteractionManager</code> is reported as a crash with the file and line (it was only listed as upcoming work before). <a href="/fix/interactionmanager-removed-react-native-0-87">How to move to requestIdleCallback</a>.</li>
+<li><span class="tag">Explain</span><code>nativekeel explain</code> recognises any "'RCT….h' file not found" and the development-build InteractionManager message.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.87</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Report</span><b>Help line only when there is a deadline.</b> The terminal report used to end with a link to the help page on every scan with serious findings. Now it shows one line with the contact address, and only when a critical or high finding has an outside deadline: Play target SDK, 16 KB pages, Xcode 27 UIScene, unsupported React Native or Expo, or New Architecture off. CI, JSON, SARIF and MCP output are unchanged.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.86</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Fix guide</span><b>"Failed to call into JavaScript module method RCTEventEmitter.receiveEvent()".</b> A new page explains this React Native 0.77+ error (often blamed on SafeAreaProvider): the AppDelegate is missing <code>RCTAppDependencyProvider</code>. It gives the line for Objective-C, Swift on 0.77–0.78 and Swift on 0.79+. The finding that detects it links to the page.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.85</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Fix guide</span><b>"-[AppDelegate window]: unrecognized selector".</b> A new page lists the libraries that crash this way after the move to UIScene, when each one crashes and its fix (pull requests sent to image-crop-picker, ui-lib, date-picker, contacts, snackbar and print today), plus a one-line workaround in your own AppDelegate. The crash finding links to it.</li>
+<li><span class="tag">Reports</span>The terminal report and upgrade plan point to Expert help instead of the old pricing section, which no longer exists.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.84</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>Check a package.json in your browser.</b> <a href="/check/">nativekeel.com/check</a> runs the CLI&#39;s own analysis in the page on the package.json (and app.json) you paste: unsupported React Native and Expo versions, libraries without New Architecture support or no longer maintained, major updates, and the upgrade plan. Your file stays in the tab; the page asks npm, React Native Directory and unpkg about the package names, the same lookups the CLI makes. Known vulnerabilities and everything that needs your code (leaked keys, native files, store settings, accessibility) stay in <code>npx nativekeel</code>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.83</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">CI</span><b>A comment on every pull request.</b> With <code>pr-comment: true</code> and <code>pull-requests: write</code>, the GitHub Action compares each pull request with its base commit and keeps one comment up to date: the findings this pull request adds or fixes, by severity, and the app&#39;s totals. It is edited on every push, not repeated, and no code runs. Pull requests from forks only get the job summary, because their token is read-only.</li>
+<li><span class="tag">Fix</span><b><code>verify</code> no longer reports old signing material as new.</b> The committed version was unpacked without git metadata, so committed keystores and signing passwords were missing on that side and showed up as new in every comparison (and in the MCP tool <code>verify_upgrade</code>). Files from the committed version now count as committed.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.82</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Performance</span><b>Compare two builds.</b> <code>npx nativekeel bundle new.map --base old.map</code> shows what changed between two release builds: packages added or removed, packages that grew or shrank by 1 KB or more, and packages now bundled twice. Tested on a real Expo app: one <code>import _ from "lodash"</code> line showed up as +107 KB. The MCP tool <code>measure_bundle</code> takes the same <code>base</code>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.81</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Performance</span><b>Measured bytes in the findings.</b> When a release source map is present, the lodash and moment finding says how much of the measured bundle each one really takes (moment&#39;s locale files separately), or that the package is not in the bundle at all, instead of only pointing at the import.</li>
+<li><span class="tag">AI agents</span><b>MCP tool <code>measure_bundle</code>.</b> Claude Code, Codex and other MCP clients can ask what the release bundle is made of: the app&#39;s share, each package&#39;s share, packages bundled twice and the largest JSON. The map must be inside the project folder the server may read.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.80</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Performance</span><b>Measure the release bundle.</b> <code>npx nativekeel bundle</code> reads the source map a release build already wrote (Android Gradle writes one under <code>android/app/build/generated/sourcemaps/react/release/</code>; Expo with <code>npx expo export --dump-sourcemap</code>) and shows how much of the shipped code is your app and each package, measured rather than guessed. Hermes bytecode maps work too. The normal scan reports the composition when it finds a map, and packages bundled twice (two versions of the same library) with their measured size. Nothing is built or run; strings and bytecode metadata have no source and are left out.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.79</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">Accuracy</span><b>Push and invitation tokens are not auth tokens.</b> The unencrypted-token check reads a storage key's constant value from the same file and the file's name, so a push-notification token behind <code>SYNCED_KEY</code> in <code>pushRegistration.ts</code> is no longer reported; single-use invitation tokens are not either. Found by scanning a real production app.</li>
+<li><span class="tag">Accuracy</span><b>Large JSON required inside a function.</b> It is still in the bundle every user downloads, but it is evaluated only when that code runs; the finding now says so instead of implying it loads at start.</li>
+<li><span class="tag">Corpus</span>The weekly scan added 149 apps (1,040 in total); the newer checks were spot-checked on them by hand.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.78</h2><p class="date">15 October 2026</p>
+<ul>
+<li><span class="tag">OTA updates</span><b>Runtime version kept by hand.</b> expo-updates sends an update only to builds with the same runtime version. When it is a hand-written string or follows the app version, an update made after a native change can reach builds without that native code; Expo's documentation calls this a runtime version mismatch. NativeKeel now adds a note and points to the fingerprint policy. 59 of the 107 open-source apps using expo-updates manage it by hand.</li>
+<li><span class="tag">OTA updates</span><b>CodePush.</b> The react-native-code-push finding now says that Visual Studio App Center was retired on 31 March 2025 and Microsoft archived both the client and its standalone CodePush server: without your own server, updates sent this way no longer reach users.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.77</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Databases visible in the Files app.</b> With iOS file sharing on (<code>UIFileSharingEnabled</code>, in Info.plist or app.json), the app's Documents folder shows up in Finder and, with <code>LSSupportsOpeningDocumentsInPlace</code>, in the Files app. react-native-mmkv, expo-sqlite and Realm keep their data in Documents by default on iOS (checked in each library's source), so an unencrypted database can be copied out by anyone holding the unlocked phone. Encrypted stores and stores with a custom location are not reported.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.76</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Biometric unlock that only checks a yes/no.</b> When an app asks for Face ID, Touch ID or a fingerprint and trusts the success result, but no secret or key is bound to biometrics anywhere (react-native-keychain access control, expo-secure-store <code>requireAuthentication</code>, react-native-biometrics signatures, or the iOS/Android native equivalents), the prompt guards the screen, not the data. The finding states the prerequisite plainly: physical access to a jailbroken or rooted device with instrumentation (OWASP MASTG local authentication). Found in 41 of 871 open-source apps, wallets among them.</li>
+<li><span class="tag">Accuracy</span>The README now describes unused packages as review candidates, as the report has since 0.1.68.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.75</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">Accessibility</span><b>Placeholder text is checked for contrast.</b> People read the placeholder to know what to type, and WCAG treats it as text. A literal <code>placeholderTextColor</code> is compared with the input's own background or, when it has none (inputs are transparent by default), the view behind it. 226 placeholders in 55 of 871 open-source apps fall below 4.5:1, often light grey on white.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.74</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">Performance</span><b>Large JSON in the JavaScript bundle.</b> JSON files over 300 KB imported or required from app code become modules in the bundle, so every user downloads them and the app loads them with everything else. Translations for every language get &quot;load only the active language&quot;; Lottie animations get &quot;use a .lottie asset&quot;. Dynamic imports, tests, fixtures and stories do not count. Found in 19 of 871 open-source apps (up to 11 MB in one).</li>
+<li><span class="tag">Accessibility</span>A note (not a warning) when touchables have no <code>accessibilityRole</code>: screen readers then do not say they can be pressed. It is missing in 94% of the open-source apps that use touchables, so it is listed without raising the severity.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.73</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>Text that is hard to read.</b> Where a React Native <code>Text</code> has a literal color and the nearest background behind it is a literal opaque color (inline or in the file's <code>StyleSheet</code>), pairs below WCAG 2.2 AA are reported with both colors and the ratio: 4.5:1 for normal text, 3:1 for large text. Themed, computed or translucent colors, opacity, images and custom components between the text and its background are left alone. Found in 180 of 871 open-source apps; samples checked by hand.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.72</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>Buttons too small to tap.</b> React Native touchables whose tappable area is certainly under 44×44 points (an explicit width and height below 44 in an inline style or the file's <code>StyleSheet</code>, or no style around a single small icon) and no <code>hitSlop</code>. Apple recommends 44×44 pt and Android 48×48 dp; the report says separately when a button is also under the WCAG 2.2 AA minimum of 24×24. Sizes it cannot read (computed, spread, flex) are left alone. Found in 209 of 871 open-source apps; samples checked by hand.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.71</h2><p class="date">14 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>Accessibility checks.</b> Icon-only buttons (React Native touchables with just an icon or image) that have no <code>accessibilityLabel</code>: VoiceOver and TalkBack announce them as an unnamed &quot;button&quot;. Text fields with no label or placeholder. Text scaling turned off for the whole app. On 871 open-source apps, 282 have at least one unlabeled icon button and 119 an unlabeled text field; samples were checked by hand.</li>
+<li><span class="tag">Upgrade</span><b><code>Text.defaultProps</code> stops working on React 19.</b> React Native 0.78 ships React 19, which applies defaultProps only to class components; React Native and Expo compile JSX with the automatic runtime, so app-wide fonts or font-scaling limits set this way silently stop applying. Apps on 0.78+ are told the setting has no effect; older apps are warned before the upgrade. Projects using NativeWind or the classic JSX runtime, where <code>createElement</code> still applies them, are not flagged.</li>
+<li><span class="tag">Plan</span><code>nativekeel improve</code> has an accessibility group with VoiceOver/TalkBack and largest-text verification, and the upgrade plan a phase for it.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.70</h2><p class="date">12 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>AI keys in the app bundle are treated as exposed credentials.</b> In <code>nativekeel improve</code> they are marked for containment, suggest a provider spending limit until the key is revoked, and recovery never puts a provider key back into the app.</li>
+<li><span class="tag">Plan</span>Committed signing passwords and keystores get signing-specific checks (who had access, Play upload key reset, release signing from protected storage) instead of provider access-log advice. React Native, Expo, New Architecture and native-project work has its own "upgrade" group with build-and-test verification, instead of dependency-replacement advice.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.69</h2><p class="date">12 October 2026</p>
+<ul>
+<li><span class="tag">Fix</span><b>One odd package.json entry no longer stops the scan.</b> Since 0.1.64 a dependency name that is not a valid package name (a typo such as <code>"@types/"</code>, or a workspace alias such as <code>"@global-ui"</code>) refused the whole scan. Those entries are now skipped with a warning, and they still never reach a path, a command or a registry request. Found in 3 of 871 open-source apps when rescanning them with 0.1.68.</li>
+<li><span class="tag">Plan</span>On React Native before 0.76, the improvement plan now says how to switch on the New Architecture (after upgrading to 0.76–0.81) instead of pointing back at the finding. Other actions without their own steps point to <code>npx nativekeel plan</code>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.68</h2><p class="date">12 October 2026</p>
+<ul>
+<li><span class="tag">Plan</span><b>Review the whole app in order.</b> <code>nativekeel improve</code> and MCP <code>improve_app</code> turn existing security, crash, performance, store and dependency findings into actions with applicability conditions, verification and recovery. Each action carries the same concrete steps as the upgrade plan. This adds a decision layer, not new vulnerability detectors.</li>
+<li><span class="tag">Security</span><b>Exposed credentials need containment.</b> Secret findings get provider revocation or rotation steps rather than a generic instruction to reproduce an exploit. Dedicated test keys, comments and platform signing identities have separate guidance. Recovery never restores a leaked credential.</li>
+<li><span class="tag">Accuracy</span><b>Review dependencies before removing them.</b> Optional and nested installed references are checked, and incomplete evidence suppresses unused candidates. Dynamic, native and generated consumers still need review. Upgrade advice is retained.</li>
+<li><span class="tag">Performance</span>Source logging, list and import patterns no longer imply measured release cost or speed gains. Terminal output is plain text; saved plans use escaped Markdown. Narrow import experiments remain documented separately from the main CLI help.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.67</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">Fix</span><b>The Codex plugin can scan projects again.</b> Since 0.1.64, a server started inside a plugin folder needed <code>NATIVEKEEL_MCP_ROOTS</code>, but Codex does not let users set environment variables for a plugin's server, so every scan from the plugin was refused. Codex starts plugin servers in the plugin's own folder, which says nothing about the open project, so the boundary there is your home folder again. To limit it to one project, configure the server yourself in <code>~/.codex/config.toml</code> with <code>NATIVEKEEL_MCP_ROOTS</code>. The tools stay read-only, never run project code and never return source code. Claude Code is not affected: it starts the server in the project folder.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.66</h2><p class="date">11 October 2026</p>
+<p>Six native Android checks trace archive entry paths into file writes and incoming Intent fields into launches, WebViews, local SQL and file reads/writes. An explicit exported manifest entry and matching Java/Kotlin class are required for Intent findings; literal Gradle namespaces are supported. Reports state the attacker prerequisites, Android 14/16 protections and verification steps. Guarded or complex flows are unresolved, not marked safe.</p>
+<p>270 tests pass. A read-only pass over 922 repositories produced no new matching findings; this is scope calibration, not a security certificate. No app or malicious sample was run. <a href="security.html">Coverage and limits →</a></p></div>
+<div class="rel"><h2>0.1.65</h2><p class="date">11 October 2026</p>
+<ul><li><code>nativekeel security</code> and MCP <code>security_audit</code>: a focused report of data exposure, account access and code execution risks.</li><li>Eight new checks: credentials in telemetry and URLs, WebView/network data evaluated as code, external input in SQLite query text, PKCE disabled, implicit OAuth tokens, and broad private FileProvider paths.</li><li>New findings include source evidence, attacker prerequisites, a fix and local verification steps. SARIF points to the evidence. Reports show coverage limits; zero findings is not a passed security assessment.</li></ul><p><a href="security.html">What the security review checks →</a></p></div>
+
+<div class="rel"><h2>0.1.64</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Safer scans from AI agents.</b> MCP checks project file reads against allowed roots, rejects unsafe dependency names, and keeps malware stop warnings in upgrade plans, error explanations and verification results. A project with suspected malware no longer gets a plan that starts by running tests. Removed instruction-like object keys are not echoed in diagnostic paths. These defenses reduce risk; text filtering cannot make an agent immune to prompt injection.</li>
+<li><span class="tag">Security</span><b>More access-control checks for mobile backends.</b> Finds Firebase write rules that only require sign-in and supported Supabase migrations with unconditional SELECT and UPDATE/DELETE policies for anonymous or signed-in users. Reports source locations and prerequisites; does not claim the rules are deployed or that a live attack succeeded. Public reads, insert-only forms and restrictive policies are handled conservatively.</li>
+<li><span class="tag">Configuration</span><b>Plugin servers need explicit project roots.</b> Set <code>NATIVEKEEL_MCP_ROOTS</code> in the MCP server environment when it starts inside a plugin directory. The home folder is no longer granted automatically. For monorepos, allow the workspace root if hoisted dependencies must be read.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.63</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">AI agents</span><b>Codex plugin.</b> <code>codex plugin marketplace add AlicanAkyol/nativekeel</code>, then <code>codex plugin add nativekeel@nativekeel</code>. It adds the MCP server, pinned to the release, and the same skill as the Claude Code plugin, so Codex checks the project before upgrades and library changes, explains errors and verifies the upgrade before you commit. Built on the open Agent Plugins format and installed with Codex CLI 0.162.</li>
+<li><span class="tag">Security</span><b>Folder boundary for servers started inside a plugin.</b> Codex starts plugin servers in the plugin's own folder, which says nothing about the project you have open. There NativeKeel uses your home folder as the boundary, or only the folders in <code>NATIVEKEEL_MCP_ROOTS</code> when you set it.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.62</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>Check an upgrade before you commit it.</b> <code>npx nativekeel verify</code> compares the project as committed (HEAD, or <code>--base</code> any branch, tag or commit) with your working tree: what got fixed, what is new, and how React Native, Expo and the dependencies moved. It exits with 1 when the change adds a critical or high finding, so it works as a pre-commit or CI check. AI agents get the same as the <code>verify_upgrade</code> MCP tool, and the Claude Code plugin tells Claude to run it after an upgrade. The committed version is unpacked with <code>git archive</code> into a temporary folder outside the project and deleted afterwards; revisions that look like options or ranges are refused, and the repository's own git config cannot make it run anything.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.61</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>Explain an error.</b> <code>npx nativekeel explain "&lt;error&gt;"</code> (or pipe a log into it), and <code>explain_error</code> for AI agents over MCP: what a build, launch, crash or App Store / Google Play review error means and the fix. Add <code>--path .</code> to see where your project is affected, from the same checks as the scan. It covers 21 errors we reproduced or verified at the source, among them <code>-[AppDelegate window]: unrecognized selector</code> with the React Native 0.88 template, <code>'RCTComponent.h' file not found</code>, <code>InteractionManager</code> removed in 0.87, ITMS-91061, Xcode 27's UIScene requirement, the 16 KB page size warning and App Store 5.1.1(v). The error text is matched on your machine and never sent anywhere.</li>
+<li><span class="tag">AI agents</span><b>The Claude Code plugin installs NativeKeel from a lockfile</b> with the package's integrity hash instead of downloading it on every start, and has an icon.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.60</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">Fix</span><b>Expo SDKs are named with the React Native version they ship</b> ("Expo SDK 58 (beta, React Native 0.88)"). In our test an AI agent read "SDK 58" next to the React Native 0.87 changes and told the user SDK 58 ships 0.87.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.59</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">Upgrade</span><b>What changes in the next version, in your code.</b> Release notes list everything; NativeKeel now lists only the changes that touch your app, each with <code>file:line</code> and what to do, and includes the next version while it is still in beta. For React Native 0.87: <code>InteractionManager</code>, the <code>StatusBar</code> <code>backgroundColor</code>/<code>translucent</code> props, <code>Modal animated</code>, boolean <code>keyboardShouldPersistTaps</code>, deep imports that become type errors, bare <code>#import &lt;RCT…h&gt;</code> lines, Node.js 22.13+. For Expo SDK 58 (beta): R8 on by default in release builds, <code>File.write()</code> becoming async, libSQL removed from expo-sqlite, foreground notifications shown by default, the expo-router navigation rework, <code>NODE_ENV</code> set before <code>.env</code> loads, and more. Measured on 675 open-source apps: 578 are touched by at least one change, most often R8 (479 apps), the <code>StatusBar</code> props (103) and <code>InteractionManager</code> (47). We added this after watching an AI agent find the SDK 58 changes on the web that NativeKeel did not know about.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.58</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">AI agents</span><b>The Claude Code plugin runs an exact NativeKeel version</b> instead of whatever is latest on npm, and updates with each release. Its README lists what it runs, what it reads and the only data it sends (package names and versions, to npm, React Native Directory and unpkg; no source code, no telemetry).</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.57</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">AI agents</span><b>Claude Code plugin.</b> <code>claude plugin marketplace add AlicanAkyol/nativekeel</code>, then <code>claude plugin install nativekeel@nativekeel</code>. It adds the MCP server and a skill that tells Claude when to use it: before upgrading React Native or Expo, adding a native library, preparing a store release, or running a project you did not write. In our test Claude used it without being asked, took 7 turns instead of 16, and found a store-blocking issue it missed on its own. <a href="/ai-agents">Details</a>.</li>
+<li><span class="tag">AI agents</span><b>One-click install in Cursor and VS Code</b>, and a one-line <code>AGENTS.md</code> rule for agents without MCP.</li>
+<li><span class="tag">Security</span><b>MCP server started in the filesystem root.</b> Some clients start servers in <code>/</code>, which made every folder readable to the scan. That folder no longer counts; name your projects with <code>NATIVEKEEL_MCP_ROOTS</code>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.56</h2><p class="date">11 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Malware planted in a project, found before you run it.</b> Fake job tests and sample projects sent to developers hide code that steals credentials and crypto wallets. They use three tricks: a VS Code task with <code>"runOn": "folderOpen"</code> that runs when the folder is opened, code hidden after a long run of spaces at the end of <code>babel.config.js</code> (Babel loads it on every start and build), and JavaScript saved as a font file. While scanning 925 open-source React Native and Expo repositories we found four that still contain it, one with 69 stars and 17 forks, and in one the commit titled "Remove injected malware" is the one that adds it. NativeKeel now reports these as critical and says not to install, start or open the project until it is cleaned. It reads these files and never runs anything from the project, so it is safe to run first on a repository you do not trust. With 0 false alarms on the other 921 repositories. Over MCP, the result carries a warning telling the AI agent not to run the project.</li>
+<li><span class="tag">Security</span><b>Visible auto-run tasks.</b> A VS Code task that runs on folder open but does nothing suspicious is a medium note, so whoever clones the repository knows what runs.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.55</h2><p class="date">10 October 2026</p>
+<ul>
+<li><span class="tag">AI agents</span><b>Listed in the official MCP Registry</b> as <code>io.github.AlicanAkyol/nativekeel</code>, so MCP clients and directories that read the registry can find and install it. Every release updates the listing from GitHub Actions: ownership is proven with the workflow's OIDC token (no stored secret), and the publisher tool is pinned and checksum-verified.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.54</h2><p class="date">10 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Keychain items readable while the device is locked.</b> The "Always" accessibility levels (<code>ACCESSIBLE.ALWAYS</code> in react-native-keychain, <code>SecureStore.ALWAYS</code> in expo-secure-store, <code>kSecAttrAccessibleAlways</code> and their <code>THIS_DEVICE_ONLY</code> variants) let an item be read whether or not the device is locked, so the passcode no longer protects it. Apple deprecated them in iOS 12. Reported as medium with the replacement (<code>AFTER_FIRST_UNLOCK</code> for background access, <code>WHEN_UNLOCKED</code> otherwise). Found in 3 of 880+ open-source apps: two Lightning wallets and a clinic records app. (OWASP MASVS-STORAGE)</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.53</h2><p class="date">10 October 2026</p>
+<ul>
+<li><span class="tag">New</span><b>NativeKeel for AI coding agents (MCP).</b> <code>npx nativekeel mcp</code> lets Claude Code, Codex, Cursor and other MCP clients scan a project, get the upgrade plan and check a library against your React Native version, instead of guessing. Read-only, scans only the folders you allow, never returns source code, and removes text in the repository that tries to give the agent instructions. <a href="/ai-agents">Set it up</a>.</li>
+<li><span class="tag">Security</span><b>A scanned repository can no longer run a command through git.</b> NativeKeel runs <code>git ls-files</code> to know which files are committed, and a repository's own <code>.git/config</code> can make that run a program (<code>core.fsmonitor</code>; checked with git 2.50.1). That matters when you scan a project you did not create, such as a zip with its <code>.git</code> folder. Every option that runs a program is now switched off for the scan, and a test plants one and fails if it runs.</li>
+<li><span class="tag">Docs</span><a href="https://github.com/AlicanAkyol/nativekeel/blob/main/SECURITY.md">SECURITY.md</a> now explains how untrusted projects are handled, how the MCP server is isolated, and for each security check what it can and cannot detect.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.52</h2><p class="date">10 October 2026</p>
+<ul>
+<li><span class="tag">App Store</span><b>Xcode 27: the UIScene life cycle.</b> Built with the iOS 27 SDK, an app that has not adopted the scene life cycle stops at launch ("UIScene life cycle is required for apps built with this SDK"), and App Store Connect requires that SDK from April 2027. NativeKeel now says whether your app has adopted it and what to do: React Native 0.88 is the first template with it; Expo SDK 57 opts in with <code>ios.enableSceneSupport</code>; SDK 58 has it by default. 767 of 833 iOS apps in our scan have not adopted it yet. <a href="/fix/uiscene-life-cycle-required-xcode-27">What to change</a>.</li>
+<li><span class="tag">Crash</span><b>What breaks after the move.</b> Deep links and universal links that are still handled only in AppDelegate stop arriving. Libraries that read the window from the app delegate crash with "-[AppDelegate window]: unrecognized selector" on the React Native 0.88 template. We reproduced this on that template and sent fixes to <a href="https://github.com/RonRadtke/react-native-blob-util/pull/498">react-native-blob-util</a> and <a href="https://github.com/invertase/react-native-google-mobile-ads/pull/911">react-native-google-mobile-ads</a>. NativeKeel lists the installed packages that do it and the one-line workaround.</li>
+<li><span class="tag">Fix</span><b>Store review checks were not running.</b> Since 0.1.42, a refactor left the account deletion (5.1.1(v)), Sign in with Apple (4.8) and iOS SDK privacy manifest (ITMS-91061) checks out of the report. They run again, and a new test fails if any check stops being called.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.51</h2><p class="date">9 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Recovery phrases and private keys copied to the clipboard.</b> Keyboards with clipboard history and cloud clipboard sync keep a copy, every app the user pastes into receives it, and on Android 9 and older any background app can read it. Reported as medium when a seed phrase, mnemonic, private key or secret key goes to the clipboard and is not cleared again (a timer that clears it after a minute counts as cleared). Found in 8 of 869 open-source apps, almost all crypto wallets. (OWASP MASVS-STORAGE)</li>
+<li><span class="tag">Play Store</span><b>expo-sqlite's sqlite-vec option breaks 16 KB alignment.</b> With <code>withSQLiteVecExtension</code> (or <code>useLibSQL</code> on SDK 57), expo-sqlite adds a prebuilt 64-bit library that is 4 KB aligned, so Google Play will block the app's updates from 1 February 2027. We found it by checking the prebuilt libraries of the 259 native packages our test apps use most, and reported it to Expo (<a href="https://github.com/expo/expo/issues/51329">expo/expo#51329</a>) and upstream (<a href="https://github.com/asg017/sqlite-vec/pull/254">sqlite-vec#254</a>). The default expo-sqlite build is fine.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.50</h2><p class="date">9 October 2026</p>
+<ul>
+<li><span class="tag">Upgrades</span><b>react-native-push-notification and React Native 0.82.</b> The library calls <code>getReactNativeHost()</code> when the FCM token refreshes and when a notification action is tapped. From React Native 0.82 that getter throws unless <code>MainApplication</code> still overrides it, and the 0.82 template no longer does. The finding now warns about it before the upgrade.</li>
+<li><span class="tag">Behind the scenes</span>We scanned the Android code of the 259 native libraries our test apps use most, looking for the two patterns that crash under the New Architecture: <code>@ReactMethod</code> functions that return something (react-native-track-player 4.x, <a href="https://github.com/doublesymmetry/react-native-track-player/pull/2685">now with a fix</a>) and unguarded <code>getReactNativeHost()</code> calls. Every other hit turned out to be guarded, a codegen override, dead code or an example app. The popular ecosystem is in good shape here.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.49</h2><p class="date">9 October 2026</p>
+<ul>
+<li><span class="tag">Upgrades</span><b>react-native-track-player: what the registries do not tell you.</b> Version 5, the New Architecture rewrite, is a different package (<code>@rntp/player</code>) under a commercial license. The free 4.x line does not compile with Kotlin 2.1 and crashes at launch with the New Architecture on Android. The finding now says so, and points to <a href="https://github.com/doublesymmetry/react-native-track-player/pull/2685">our pull request with the fixes</a> (apply it with patch-package until it is released), or to expo-audio for simple playback.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.48</h2><p class="date">9 October 2026</p>
+<ul>
+<li><span class="tag">Accuracy</span><b>Face ID with expo-local-authentication is not a crash.</b> Without <code>NSFaceIDUsageDescription</code>, most biometrics libraries crash on iOS 17+, and that stays high. <code>expo-local-authentication</code> checks for the key itself and skips Face ID instead, so it is now a medium "Face ID never shows" finding.</li>
+<li><span class="tag">Accuracy</span><b>Vulnerability counts show what reaches a mobile app.</b> axios advisories about proxies, <code>no_proxy</code>, SSRF and the Node.js HTTP adapter cannot reach React Native, which uses XMLHttpRequest. The title now reads "21 known vulnerabilities (+11 for Node.js only)" instead of 32.</li>
+<li><span class="tag">Fix</span>React Native release candidates show their full version (<code>0.88.0-rc.4</code>), not <code>0.88.0</code>.</li>
+<li><span class="tag">Behind the scenes</span>Checked on Expo Go, the Yoroi and Valora wallets.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.47</h2><p class="date">9 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>AI provider keys that ship inside the app.</b> Reading <code>process.env.EXPO_PUBLIC_OPENAI_API_KEY</code> (or a Gemini, Anthropic, Groq, OpenRouter, Replicate, fal.ai… key) in app code compiles the key into the JavaScript bundle, even though <code>.env</code> is never committed. The same goes for <code>react-native-config</code> and <code>react-native-dotenv</code>. Anyone who unpacks the app can run requests on your bill. Reported as high, with a note when the app also calls the provider directly; server folders and Expo API routes are left out. Found in 12 of 869 open-source apps, almost all AI features added in the last year (<a href="/ai-keys">what we found</a>).</li>
+<li><span class="tag">Accuracy</span>A private key in a <code>.env</code> file used only by server code (Expo API routes) is reported as committed to the repository, not as shipped inside the app: Expo inlines only <code>EXPO_PUBLIC_</code> variables. The public demo keys that <code>supabase start</code> gives every developer are no longer reported.</li>
+<li><span class="tag">Behind the scenes</span>We added 148 open-source health and wellbeing apps to the test set and measured a "health data sent to analytics" check on them. It found no real case (most of these apps use no analytics at all), so it is not shipped.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.46</h2><p class="date">9 October 2026</p>
+<ul>
+<li><span class="tag">Accuracy</span><b>Mixed React Navigation majors: a crash only with two copies of the core.</b> NativeKeel now reads the lockfile (npm, Yarn, pnpm and Bun). If two majors of <code>@react-navigation/native</code> or <code>core</code> are installed, navigators run against a different container and crash: still high. With one copy, a navigator from the other major usually runs (a large open-source wallet ships this way), so it is reported as an unsupported mix (medium).</li>
+<li><span class="tag">Accuracy</span><b>WebView file-URL flags on web pages.</b> <code>allowUniversalAccessFromFileURLs</code> only matters for pages loaded from <code>file://</code>. A WebView that only opens web URLs gets a low "remove the flag" note. Bundled, downloaded or inline HTML keeps the high finding, including when the address is defined in another file the screen imports.</li>
+<li><span class="tag">Accuracy</span><b>Local fallback keystores.</b> A keystore with a throwaway password (<code>"password"</code>), used only in the <code>else</code> branch when the real signing values come from Gradle properties, is not reported as a leaked release key. A real password in that branch is still reported.</li>
+<li><span class="tag">Accuracy</span>Libraries whose native side <code>react-native.config.js</code> builds from another folder (a shim that links Reanimated 3 on a legacy-architecture Android build) are not checked against the installed version's architecture support. <code>Math.random</code> in a mock or dummy response is not reported. A private key in a test file is low (a test key pair protects nothing, unless it is reused).</li>
+</ul></div>
 
 <div class="rel"><h2>0.1.45</h2><p class="date">9 October 2026</p>
 <ul>

@@ -11,10 +11,12 @@ import { markdownReport } from '../src/report-md.js';
 import { buildPlan, planToMarkdown } from '../src/plan.js';
 import { applyBaseline, saveBaseline } from '../src/baseline.js';
 import { compareScans, compareToMarkdown } from '../src/compare.js';
+import { securityOnly } from '../src/security-review.js';
+import { buildImprovementPlan, improvementToMarkdown, improvementToText } from '../src/improve.js';
 import { SITE_URL } from '../src/config.js';
 
-const VALUE_FLAGS = new Set(['--html', '--out', '--baseline', '--save-baseline', '--brand', '--sarif', '--markdown', '--fail-on']);
-const COMMANDS = new Set(['scan', 'plan', 'compare', 'help']);
+const VALUE_FLAGS = new Set(['--html', '--out', '--baseline', '--save-baseline', '--brand', '--sarif', '--markdown', '--fail-on', '--path', '--base', '--comment', '--report-url']);
+const COMMANDS = new Set(['scan', 'security', 'improve', 'bundle', 'plan', 'compare', 'compare-imports', 'prepare-imports', 'explain', 'verify', 'mcp', 'help']);
 
 function parseArgs(argv) {
   const flags = {};
@@ -43,9 +45,23 @@ const HELP = `NativeKeel: health check for React Native and Expo apps
 
 Usage
   npx nativekeel [path]          Scan an app and print the report
+  npx nativekeel security [path]  Review data theft, account access and code execution risks
+  npx nativekeel improve [path]  Prioritized app improvement review (--json or --out)
+  npx nativekeel bundle [path | file.map] [--base old.map]
+                                 What the release JavaScript bundle is made of, measured
+                                 from the source map a release build wrote; with --base,
+                                 what grew, shrank or was added since that build (--json)
   npx nativekeel plan [path]     Write a step-by-step upgrade plan
   npx nativekeel compare <before.json> <after.json>
                                  What got fixed and what is new between two scans
+  npx nativekeel explain "<error>" [--path <app>]
+                                 What a build, launch or store error means and the
+                                 fix (or pipe a log in: ... | npx nativekeel explain)
+  npx nativekeel verify [path] [--base <rev>]
+                                 After an upgrade: what got fixed and what is new
+                                 compared with the last commit (exit 1 on new
+                                 critical/high findings)
+  npx nativekeel mcp             Run as an MCP server for AI coding agents (stdio)
 
 Scan options
   --json                    Machine-readable output
@@ -103,6 +119,78 @@ async function main() {
     return 0;
   }
 
+  if (command === 'mcp') {
+    // stdout belongs to the protocol from here on; anything else goes to stderr.
+    const { serve } = await import('../src/mcp.js');
+    console.log = (...a) => process.stderr.write(`${a.join(' ')}\n`);
+    await serve({ version: packageVersion() });
+    return 0;
+  }
+
+  if (command === 'explain') {
+    const { explainError, relatedFindings } = await import('../src/errors.js');
+    let text = positional.join(' ');
+    if (!text && !process.stdin.isTTY) text = fs.readFileSync(0, 'utf8');
+    if (!text.trim()) fail('usage: nativekeel explain "<error message>" [--path <app>]  (or pipe a log into it)');
+    const matches = explainError(text).slice(0, 3);
+    let findings = null;
+    if (flags.path && matches.length) findings = (await runScan(path.resolve(flags.path), { ...flags, offline: true, json: true })).findings;
+    if (flags.json) {
+      console.log(JSON.stringify(matches.map((e) => ({ id: e.id, title: e.title, cause: e.cause, fix: e.fix, page: e.page, inThisProject: findings ? relatedFindings(e, findings).map((f) => ({ id: f.id, severity: f.severity, title: f.title })) : undefined })), null, 2));
+      return matches.length ? 0 : 1;
+    }
+    if (!matches.length) {
+      console.log(`Not a known error. Run \`npx nativekeel\` in the app: many build and launch failures come from a version mismatch it reports.\nKnown errors: ${SITE_URL}/fix/`);
+      return 1;
+    }
+    for (const e of matches) {
+      console.log(`\n${e.title}\n\n${e.cause}\n\nFix:\n${e.fix.map((f) => `  - ${f}`).join('\n')}`);
+      if (findings) {
+        const here = relatedFindings(e, findings);
+        console.log(here.length ? `\nIn this project:\n${here.slice(0, 5).map((f) => `  - [${f.severity}] ${f.title}`).join('\n')}` : '\nThe scan found nothing related in this project.');
+      }
+      if (e.page) console.log(`\nMore: ${e.page}`);
+    }
+    return 0;
+  }
+
+  if (command === 'verify') {
+    const { verifyUpgrade } = await import('../src/verify.js');
+    let r;
+    try {
+      r = await verifyUpgrade(path.resolve(positional[0] || '.'), { base: flags.base || 'HEAD', offline: !flags.online });
+    } catch (e) {
+      return fail(e.message);
+    }
+    if (flags.comment) {
+      const { prComment } = await import('../src/verify.js');
+      write(flags.comment, prComment(r, { reportUrl: flags['report-url'] || null }));
+    }
+    if (flags.json) {
+      console.log(JSON.stringify({ base: r.base, commit: r.commit, ok: r.ok, fixed: r.diff.fixed, added: r.diff.added, versions: r.diff.versions, counts: r.diff.counts, notes: r.notes }, null, 2));
+    } else {
+      console.log(compareToMarkdown({ ...r.diff, dates: [`${r.base} (${r.commit.slice(0, 7)})`, 'working tree'] }, { title: `Compared with ${r.base}` }).replace(/^(\d|\w).*→.*$/m, `${r.base} (${r.commit.slice(0, 7)}) → working tree`));
+      for (const n of r.notes) console.log(`Note: ${n}`);
+      console.log(r.ok ? 'No new critical or high findings.' : `${r.newSerious.length} new critical or high finding(s).`);
+    }
+    return r.ok ? 0 : 1;
+  }
+
+  if (command === 'prepare-imports') {
+    if (positional.length !== 1) fail('usage: nativekeel prepare-imports <settings.json> (redirect stdout to experiment.json beside settings.json)');
+    const { prepareImports } = await import('../src/prepare-imports.js');
+    console.log(JSON.stringify(prepareImports(path.resolve(positional[0])), null, 2));
+    return 0;
+  }
+
+  if (command === 'compare-imports') {
+    if (positional.length !== 1) fail('usage: nativekeel compare-imports <experiment.json> [--json]');
+    const { compareImports, importComparisonText } = await import('../src/compare-imports.js');
+    const result = compareImports(path.resolve(positional[0]));
+    console.log(flags.json ? JSON.stringify(result, null, 2) : importComparisonText(result));
+    return result.status === 'incomparable' ? 2 : 0;
+  }
+
   if (command === 'compare') {
     if (positional.length !== 2) fail('usage: nativekeel compare <before.json> <after.json> (scans saved with --json)');
     const [before, after] = positional.map((f) => {
@@ -121,6 +209,36 @@ async function main() {
   const root = path.resolve(positional[0] || '.');
   const brand = flags.brand || null;
 
+  if (command === 'bundle') {
+    const { analyzeSourceMap, bundleText, findBundleMaps } = await import('../src/bundle-map.js');
+    let mapFile;
+    if (/\.map$/.test(root)) mapFile = root;
+    else {
+      const [found] = findBundleMaps(root);
+      if (!found) fail(`No release source map found in ${root}. Build a release (Android writes android/app/build/generated/sourcemaps/react/release/index.android.bundle.map; Expo: npx expo export --dump-sourcemap), or pass the .map file: nativekeel bundle path/to/index.android.bundle.map`);
+      mapFile = path.join(root, found.file);
+    }
+    const shown = (f) => (path.relative(process.cwd(), f).startsWith('..') ? f : path.relative(process.cwd(), f));
+    const result = analyzeSourceMap(fs.readFileSync(mapFile, 'utf8'));
+    if (flags.base) {
+      const { compareBundles, compareText } = await import('../src/bundle-map.js');
+      const baseFile = path.resolve(flags.base);
+      const diff = compareBundles(analyzeSourceMap(fs.readFileSync(baseFile, 'utf8')), result);
+      console.log(flags.json ? JSON.stringify(diff, null, 2) : compareText(diff, shown(baseFile), shown(mapFile)));
+      return 0;
+    }
+    console.log(flags.json ? JSON.stringify(result, null, 2) : bundleText(result, shown(mapFile)));
+    return 0;
+  }
+
+  if (command === 'improve') {
+    const plan = buildImprovementPlan(await runScan(root, flags));
+    const output = flags.json ? JSON.stringify(plan, null, 2) : flags.out ? improvementToMarkdown(plan) : improvementToText(plan);
+    if (flags.out) write(flags.out, output);
+    else console.log(output);
+    return plan.safety.blocked ? 1 : 0;
+  }
+
   if (command === 'plan') {
     const result = await runScan(root, flags);
     const plan = buildPlan(result);
@@ -134,6 +252,7 @@ async function main() {
   const failOn = flags['fail-on'] || 'critical';
   if (!['critical', 'high', 'medium', 'low', 'never'].includes(failOn)) fail('--fail-on must be one of critical, high, medium, low, never');
   let result = await runScan(root, flags);
+  if (command === 'security') result = securityOnly(result);
   if (flags['save-baseline']) {
     const count = saveBaseline(flags['save-baseline'], result);
     process.stderr.write(`Baseline saved with ${count} known findings: ${path.resolve(flags['save-baseline'])}\n`);
@@ -146,6 +265,7 @@ async function main() {
     }
   }
 
+  if (command === 'security') result = securityOnly(result);
   if (flags.html) write(flags.html, htmlReport(result, { brand }));
   if (flags.markdown) write(flags.markdown, markdownReport(result, { verbose: !!flags.verbose }));
   if (flags.sarif) write(flags.sarif, `${JSON.stringify(sarifReport(result, { version: packageVersion() }), null, 2)}\n`);

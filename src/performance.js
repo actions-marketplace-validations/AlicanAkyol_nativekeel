@@ -1,5 +1,6 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
 import path from 'node:path';
+import { rootImportEvidence } from './import-evidence.js';
 
 // Performance problems you can see in the code: things that make lists stutter, animations run
 // on the JavaScript thread, or the app download heavier than it needs to be. Runtime profiling
@@ -18,7 +19,7 @@ function* walk(dir, test) {
   for (const e of entries) {
     if (e.isDirectory()) {
       if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) yield* walk(path.join(dir, e.name), test);
-    } else if (test.test(e.name) && !/\.(test|spec)[._]/.test(e.name)) {
+    } else if (test.test(e.name) && !/\.(test|spec)[._]/.test(e.name) && !/\.d\.[cm]?ts$/.test(e.name)) {
       yield path.join(dir, e.name);
     }
   }
@@ -91,9 +92,7 @@ export function performanceChecks(project) {
       if (/shallowEqual|isEqual|equalityFn|,\s*\w+Equal\s*\)/.test(close)) continue;
       selectors.push(`${rel}:${code.slice(0, m.index).split('\n').length}`);
     }
-    // Whole-library imports of packages with per-function or lighter alternatives.
-    if (/from\s+['"]lodash['"]|require\(\s*['"]lodash['"]\s*\)/.test(code)) heavyImports.set('lodash', heavyImports.get('lodash') || rel);
-    if (/from\s+['"]moment['"]|require\(\s*['"]moment['"]\s*\)/.test(code)) heavyImports.set('moment', heavyImports.get('moment') || rel);
+    for (const hit of rootImportEvidence(text)) if (!heavyImports.has(hit.name)) heavyImports.set(hit.name, `${rel}:${hit.line}`);
   }
 
   if (nested.length) {
@@ -101,8 +100,8 @@ export function performanceChecks(project) {
       id: 'perf-nested-lists',
       severity: 'medium',
       area: 'performance',
-      title: `A list inside a ScrollView renders every item at once (${nested[0]}${nested.length > 1 ? ` and ${nested.length - 1} more` : ''})`,
-      detail: 'A vertical FlatList/SectionList inside a vertical ScrollView loses virtualization: all rows mount up front, which costs memory and makes long lists stutter or crash on low-end Android. Use the list as the scroll container and move the other content into ListHeaderComponent/ListFooterComponent.',
+      title: `Review a list nested inside a ScrollView (${nested[0]}${nested.length > 1 ? ` and ${nested.length - 1} more` : ''})`,
+      detail: 'The source contains nested list component names. Confirm these resolve to the expected React Native components and share a scroll direction. This arrangement may interfere with virtualization; mounted row counts, memory use and scrolling performance have not been measured. Consider making the list the scroll container after checking layout behavior.',
       fix: { kind: 'performance', step: `In \`${nested[0]}\`, make the FlatList the scroll container (ListHeaderComponent/ListFooterComponent) instead of nesting it in a ScrollView.` },
     });
   }
@@ -112,7 +111,7 @@ export function performanceChecks(project) {
       severity: 'low',
       area: 'performance',
       title: `${jsDriver} animations run on the JavaScript thread (useNativeDriver: false, e.g. ${jsDriverAt})`,
-      detail: 'Each frame of these animations waits for JavaScript, so they drop frames whenever the app is busy. Transform and opacity animations can use useNativeDriver: true; layout animations can move to Reanimated.',
+      detail: 'The source contains useNativeDriver: false settings. Confirm these configure active React Native Animated calls. JavaScript-driven animations can be affected by busy JS work, but no dropped frames were measured. Check whether each animated property supports the native driver before changing it; layout properties may require a different implementation.',
       fix: { kind: 'performance', step: 'Switch transform/opacity animations to `useNativeDriver: true` (or Reanimated for layout properties).' },
     });
   }
@@ -122,9 +121,9 @@ export function performanceChecks(project) {
       id: 'perf-console-in-release',
       severity: 'low',
       area: 'performance',
-      title: `${logs} console.log calls ship in the release build`,
-      detail: 'They run in production, slow the JavaScript thread in hot paths, and can write user data to the device log. Strip them from release builds with babel-plugin-transform-remove-console (keep console.error/warn).',
-      fix: { kind: 'performance', step: "Add `['transform-remove-console', { exclude: ['error', 'warn'] }]` to the production `env` of your Babel config." },
+      title: `Review ${logs} console logging calls in source`,
+      detail: 'Logging calls were found without a recognized Babel console-removal setting. Other build transforms or development guards may remove them. Inspect the release bundle and logging payloads before changing configuration; runtime cost and data exposure have not been established.',
+      fix: { kind: 'performance', step: "If unnecessary logging remains in the release bundle, review production-only console removal while preserving required diagnostics and argument side effects." },
     });
   }
   if (selectors.length) {
@@ -138,14 +137,30 @@ export function performanceChecks(project) {
     });
   }
   if (heavyImports.size) {
-    const advice = { lodash: 'import single functions (lodash/debounce) or use lodash-es with tree shaking', moment: 'use dayjs or date-fns (moment is in maintenance mode and pulls in all locales)' };
+    const advice = { lodash: 'check whether the used methods can use same-version per-method entry points; first review chaining, mixins and bundler transforms', moment: 'review the used date, locale and timezone behavior before considering any alternative' };
     findings.push({
       id: 'perf-heavy-imports',
       severity: 'low',
       area: 'performance',
-      title: `Whole-library imports of ${[...heavyImports.keys()].join(' and ')}`,
-      detail: `${[...heavyImports].map(([k, at]) => `${k} (${at}): ${advice[k]}`).join('; ')}. They add hundreds of KB to the bundle the app parses at start-up.`,
-      fix: { kind: 'performance', step: `Replace whole-library imports: ${[...heavyImports.keys()].map((k) => advice[k]).join('; ')}.` },
+      title: `Review root imports of ${[...heavyImports.keys()].join(' and ')}`,
+      detail: `${[...heavyImports].map(([k, at]) => `${k} (${at}): ${advice[k]}`).join('; ')}. Source import patterns do not establish which code ships: aliases and build transforms may change the result. Inspect the release bundle before proposing a change. No size or startup saving has been measured.`,
+      fix: { kind: 'performance', step: `Review the release bundle and behavior before changing imports: ${[...heavyImports.keys()].map((k) => advice[k]).join('; ')}. Keep the current implementation if the change adds risk without a measured benefit.` },
+      ...(heavyImports.has('lodash') ? { recommendation: {
+        recipe: 'lodash-import-scope',
+        version: 1,
+        status: 'needs-verification',
+        evidence: [{ kind: 'source-pattern', file: heavyImports.get('lodash'), package: 'lodash' }],
+        reason: 'Per-method entry points may avoid including unrelated Lodash methods. Another consumer or a build transform may already determine the shipped code, so the source pattern alone does not establish a saving.',
+        measuredBenefit: null,
+        automaticFix: false,
+        requirements: [
+          'Confirm the source pattern is an actual runtime import and resolves to the expected Lodash 4 version (other versions are outside this recipe).',
+          'Check all consumers, aliases, chaining, mixins and dynamic method access; keep the package installed.',
+          'Compare the unchanged implementation with a reviewed same-version per-method import change, using identical release build settings.',
+          'Run tests for the affected behavior and compare the actual bundles with nativekeel compare-imports; do not infer startup or frame-rate gains from bytes.',
+        ],
+        source: 'https://lodash.com/',
+      } } : {}),
     });
   }
 
@@ -153,8 +168,34 @@ export function performanceChecks(project) {
   // memory. Screenshots and docs in the repo are not part of the app, so only required files count.
   const big = [];
   const seen = new Set();
+  // JSON imported from code: Metro puts the whole file into the JavaScript bundle as a module.
+  const bigJson = [];
+  const seenJson = new Set();
   for (const file of walk(root, JS_EXT)) {
     const text = read(file);
+    const testOnly = /(?:^|[/\\])(?:__tests__|__mocks__|__fixtures__|fixtures|mocks?|stories|storybook|e2e|tests?)(?:[/\\]|$)|\.(?:stories|mock|fixture)\.[jt]sx?$/;
+    if (testOnly.test(path.relative(root, file))) continue;
+    for (const m of text.matchAll(/(?:\bfrom\s*|\brequire\(\s*|\bimport\(\s*)['"](\.{1,2}\/[^'"]+\.json)['"]/g)) {
+      const json = path.resolve(path.dirname(file), m[1]);
+      if (testOnly.test(path.relative(root, json))) continue;
+      if (seenJson.has(json)) continue;
+      seenJson.add(json);
+      try {
+        const size = fs.statSync(json).size;
+        if (size <= 300 * 1024) continue;
+        let head = '';
+        const fd = fs.openSync(json, 'r');
+        try { const buf = Buffer.alloc(4000); head = buf.toString('utf8', 0, fs.readSync(fd, buf, 0, 4000, 0)); } finally { fs.closeSync(fd); }
+        const lottie = /"layers"\s*:/.test(head) && /"(?:ddd|fr|ip|op)"\s*:/.test(head);
+        // A require() indented inside a function is still bundled, but only evaluated when that
+        // code runs; a module-level import or require is evaluated when its module loads.
+        const lineStart = text.lastIndexOf('\n', m.index) + 1;
+        const deferred = m[0].startsWith('require') && /^[ \t]+/.test(text.slice(lineStart, m.index)) && !/^[ \t]*(?:export\s+)?(?:const|let|var)\s+[\w${}\s,]+=\s*require/.test(text.slice(lineStart, m.index + 20)) || false;
+        bigJson.push({ rel: path.relative(root, json), size, lottie, lazy: m[0].startsWith('import('), deferred });
+      } catch {
+        // missing file
+      }
+    }
     for (const m of text.matchAll(/require\(\s*['"](\.{1,2}\/[^'"]+\.(?:png|jpe?g|gif|webp))['"]\s*\)|import\s+\w+\s+from\s+['"](\.{1,2}\/[^'"]+\.(?:png|jpe?g|gif|webp))['"]/gi)) {
       const img = path.resolve(path.dirname(file), m[1] || m[2]);
       if (seen.has(img)) continue;
@@ -167,6 +208,29 @@ export function performanceChecks(project) {
       }
     }
   }
+  const eager = bigJson.filter((j) => !j.lazy);
+  if (eager.length) {
+    eager.sort((a, b) => b.size - a.size);
+    const total = eager.reduce((t, j) => t + j.size, 0);
+    const deferredCount = eager.filter((j) => j.deferred).length;
+    const lotties = eager.filter((j) => j.lottie);
+    const LOCALE = /(?:^|[/._-])(?:ar|bg|cs|da|de|el|en|es|et|fa|fi|fr|he|hi|hr|hu|id|it|ja|ko|lt|lv|ms|nb|nl|no|pl|pt|ro|ru|sk|sl|sr|sv|th|tr|uk|vi|zh)(?:[-_][A-Za-z]{2,4})?(?=[/._-]|$)/;
+    const locales = eager.filter((j) => !j.lottie && LOCALE.test(j.rel.replace(/\.json$/, '')));
+    const advice = [
+      ...(locales.length >= 2 ? [`${locales.length} look like translations: load only the active language (dynamic import per locale, or download them) instead of importing every language up front`] : []),
+      ...(lotties.length ? [`${lotties.length} ${lotties.length === 1 ? 'is a Lottie animation' : 'are Lottie animations'}: .lottie files load as assets instead of inside the JavaScript bundle (add "lottie" to Metro's assetExts, as the lottie-react-native README shows)`] : []),
+    ];
+    findings.push({
+      id: 'perf-large-json',
+      severity: total > 5 * 1024 * 1024 ? 'medium' : 'low',
+      area: 'performance',
+      title: `${eager.length} JSON file${eager.length === 1 ? '' : 's'} over 300 KB imported into the JavaScript bundle (${(total / 1024 / 1024).toFixed(1)} MB)`,
+      detail: `${eager.slice(0, 3).map((j) => `${j.rel} (${Math.round(j.size / 1024)} KB)`).join(', ')}${eager.length > 3 ? ', …' : ''}. A JSON file imported or required from code becomes a module in the JavaScript bundle, so every user downloads it.${deferredCount === eager.length ? ` ${eager.length === 1 ? 'It is' : 'They are'} required inside a function, so evaluated only when that code runs.` : deferredCount ? ` ${eager.length - deferredCount} ${eager.length - deferredCount === 1 ? 'is' : 'are'} imported at module level and evaluated when ${eager.length - deferredCount === 1 ? 'its' : 'their'} module loads; ${deferredCount} ${deferredCount === 1 ? 'is' : 'are'} required inside functions and evaluated only when used.` : ' Imported at module level, it is evaluated when its module loads, whether or not that screen is used.'}${advice.length ? ` ${advice.join('. ')}.` : ' Fetch data the app does not always need, or load it with a dynamic import.'} The start-up cost was not measured.`,
+      evidence: eager.slice(0, 20).map((j) => ({ kind: 'source', file: j.rel, bytes: j.size, ...(j.lottie ? { lottie: true } : {}) })),
+      fix: { kind: 'performance', step: `Keep large data out of the start-up bundle: ${eager.slice(0, 2).map((j) => `\`${j.rel}\``).join(', ')}${eager.length > 2 ? ` and ${eager.length - 2} more` : ''}${locales.length >= 2 ? ' (load only the active language)' : ''}${lotties.length ? ' (convert Lottie JSON to .lottie assets)' : ''}. Compare the release bundle size before and after.` },
+    });
+  }
+
   if (big.length) {
     big.sort((a, b) => b.size - a.size);
     const total = big.reduce((s, b) => s + b.size, 0);

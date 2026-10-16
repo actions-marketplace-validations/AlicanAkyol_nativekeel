@@ -9,9 +9,11 @@ import { fileURLToPath } from 'node:url';
 
 const SITE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'site');
 const BASE = 'https://nativekeel.com';
-const UPDATED = '2026-10-08';
+const UPDATED = '2026-10-10';
 
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Inside an attribute a " would end the value (search engines then see half a description).
+const attr = (s) => esc(s).replace(/"/g, '&quot;');
 // Tiny markup: `code`, **bold**, [text](url), blank line = paragraph, lines starting with "- " = list,
 // ``` fenced blocks.
 function md(src) {
@@ -28,6 +30,12 @@ function md(src) {
       const lines = para.trim().split('\n');
       if (!lines[0]) continue;
       if (lines.every((l) => l.startsWith('- '))) out.push(`<ul>${lines.map((l) => `<li>${inline(l.slice(2))}</li>`).join('')}</ul>`);
+      else if (lines.length > 2 && lines.every((l) => l.trim().startsWith('|')) && /^\|[\s:-]+(\|[\s:-]+)+\|?$/.test(lines[1].trim())) {
+        const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+        const head = cells(lines[0]).map((c) => `<th>${inline(c)}</th>`).join('');
+        const rows = lines.slice(2).map((l) => `<tr>${cells(l).map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('');
+        out.push(`<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`);
+      }
       else out.push(`<p>${inline(lines.join(' '))}</p>`);
     }
   });
@@ -38,7 +46,7 @@ const PAGES = [
   {
     slug: 'android-exported',
     error: 'Manifest merger failed: android:exported needs to be explicitly specified',
-    title: 'android:exported needs to be explicitly specified (React Native, targetSdk 31+)',
+    title: 'android:exported must be explicitly specified: React Native',
     description: 'Why a React Native build fails with "android:exported needs to be explicitly specified" after raising targetSdk, and how to fix every component at once.',
     body: `
 The full message usually reads:
@@ -99,7 +107,7 @@ ITMS-91061: Missing privacy manifest - Your app includes "Frameworks/FirebaseCor
   {
     slug: 'missing-foreground-service-type',
     error: 'MissingForegroundServiceTypeException',
-    title: 'MissingForegroundServiceTypeException in React Native (Android 14)',
+    title: 'MissingForegroundServiceTypeException: React Native fix',
     description: 'Why a React Native app crashes with MissingForegroundServiceTypeException after targeting Android 14, and how to declare the foreground service type.',
     body: `
 **What it means.** If your app targets Android 14 (API level 34) and starts a foreground service whose type is not declared in the manifest, the system throws \`MissingForegroundServiceTypeException\` when the service calls \`startForeground()\`. The app crashes at that moment, not at build time.
@@ -124,7 +132,7 @@ ITMS-91061: Missing privacy manifest - Your app includes "Frameworks/FirebaseCor
   {
     slug: 'expo-packages-should-be-updated',
     error: 'The following packages should be updated for best compatibility with the installed expo version',
-    title: 'Expo: "The following packages should be updated for best compatibility"',
+    title: 'Expo: "packages should be updated for best compatibility"',
     description: 'What Expo\'s "packages should be updated for best compatibility with the installed expo version" warning means, when it causes crashes, and the one-command fix.',
     body: `
 Expo prints:
@@ -153,7 +161,7 @@ It sets every package to the version your SDK expects. Do not bump these package
   {
     slug: 'imagebackground-safeareaview-deprecated',
     error: 'ImageBackground is deprecated and will be removed in a future release',
-    title: 'ImageBackground and SafeAreaView are deprecated in React Native: how to migrate',
+    title: 'ImageBackground and SafeAreaView deprecated in React Native',
     description: 'React Native 0.87 deprecated ImageBackground (and 0.81 SafeAreaView). Why SafeAreaView already misbehaves on Android 15, and drop-in replacements for both.',
     body: `
 React Native logs:
@@ -187,9 +195,245 @@ Add \`overflow: 'hidden'\` to the outer style if you used \`borderRadius\`.
     sources: [['React Native: ImageBackground', 'https://reactnative.dev/docs/imagebackground'], ['React Native: SafeAreaView', 'https://reactnative.dev/docs/safeareaview'], ['Android 15: edge-to-edge enforcement', 'https://developer.android.com/about/versions/15/behavior-changes-15']],
   },
   {
+    slug: 'text-defaultprops-react-19',
+    updated: '2026-10-15',
+    error: 'Text.defaultProps has no effect after upgrading to React Native 0.78 (React 19)',
+    title: 'Text.defaultProps not working in React Native 0.78+',
+    description: 'React 19 ignores Text.defaultProps in React Native 0.78+: app-wide fonts and font-scaling limits stop applying with no error. Why, and the fix.',
+    body: `
+There is no error message. After moving to React Native 0.78 or later, settings like these silently stop applying:
+
+\`\`\`
+Text.defaultProps = Text.defaultProps || {};
+Text.defaultProps.allowFontScaling = false;
+TextInput.defaultProps = { ...TextInput.defaultProps, style: { fontFamily: 'Inter' } };
+\`\`\`
+
+The app-wide font or color disappears, or text that was capped now follows the system text size and fixed layouts overflow.
+
+**Why.** React Native 0.78 ships React 19, and React 19 applies \`defaultProps\` only to class components. \`Text\` and \`TextInput\` are function components. React Native and Expo compile JSX with the automatic runtime, whose \`jsx()\` never reads \`defaultProps\`, and the React Native renderer merges defaults only for classes (\`resolveClassComponentProps\`). Checked in React 19.1 and React Native 0.82.
+
+The one exception: components rendered through \`React.createElement\` still get them. NativeWind renders that way, so in NativeWind projects the defaults may still apply to styled elements.
+
+**Fix.** Move the defaults into your own components and use them everywhere:
+
+\`\`\`
+import { Text as RNText, type TextProps } from 'react-native';
+
+export function Text({ maxFontSizeMultiplier = 1.5, style, ...props }: TextProps) {
+  return <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[{ fontFamily: 'Inter' }, style]} {...props} />;
+}
+\`\`\`
+
+Do the same for \`TextInput\`, then check the main screens at the largest system text size. Prefer a cap such as \`maxFontSizeMultiplier\` over \`allowFontScaling={false}\`: turning scaling off locks out people who need larger text.
+
+**Find it in your app.** \`npx nativekeel\` reports \`Text.defaultProps\` and \`TextInput.defaultProps\` assignments: on 0.78+ that they have no effect, before 0.78 that they will stop working when you upgrade.
+`,
+    sources: [['React 19 upgrade guide: removed defaultProps for function components', 'https://react.dev/blog/2024/04/25/react-19-upgrade-guide'], ['React Native 0.78: React 19', 'https://reactnative.dev/blog/2025/02/19/react-native-0.78']],
+  },
+  {
+    slug: 'appdelegate-window-unrecognized-selector',
+    updated: '2026-10-15',
+    error: '-[AppDelegate window]: unrecognized selector sent to instance',
+    title: '[AppDelegate window]: unrecognized selector: RN fix',
+    description: 'Why a React Native or Expo app crashes with "-[AppDelegate window]: unrecognized selector" after adopting UIScene, which libraries cause it, and the fix.',
+    body: `
+The app crashes when a library shows something (a picker, a menu, an ad, a snackbar) or right at launch:
+
+\`\`\`
+-[AppDelegate window]: unrecognized selector sent to instance
+\`\`\`
+
+**Why.** With the UIKit scene life cycle the window belongs to the scene delegate, and \`AppDelegate\` has no \`window\` property at all. That is the React Native 0.88 template, Expo SDK 58, and Expo SDK 57 with \`enableSceneSupport\`. Apps built with the iOS 27 SDK must use scenes ([why](/fix/uiscene-life-cycle-required-xcode-27)), so this crash arrives with the move to Xcode 27. Libraries that still find the screen with \`[UIApplication sharedApplication].delegate.window\` send a message the AppDelegate no longer answers.
+
+**Which libraries.** Checked in each library's iOS source (October 2026):
+
+| Library | Crashes | Fix |
+|---|---|---|
+| @react-native-firebase/messaging | at launch | [upstream PR #9359](https://github.com/invertase/react-native-firebase/pull/9359) |
+| react-native-blob-util | open-in / options menu | [PR #498](https://github.com/RonRadtke/react-native-blob-util/pull/498) |
+| react-native-google-mobile-ads | banners, consent form, ad inspector | [PR #911](https://github.com/invertase/react-native-google-mobile-ads/pull/911) (approved) |
+| react-native-image-crop-picker | opening the picker or camera | [PR #2257](https://github.com/ivpusic/react-native-image-crop-picker/pull/2257) |
+| react-native-date-picker | opening the modal picker | [PR #978](https://github.com/henninghall/react-native-date-picker/pull/978) |
+| react-native-contacts | closing the contact form | [PR #841](https://github.com/morenoh149/react-native-contacts/pull/841) |
+| react-native-ui-lib | KeyboardInput dismissKeyboard | [PR #4053](https://github.com/wix/react-native-ui-lib/pull/4053) |
+| react-native-snackbar | showing a snackbar | [PR #220](https://github.com/cooperka/react-native-snackbar/pull/220) |
+| react-native-print | presenting the print dialog | [PR #237](https://github.com/christopherdro/react-native-print/pull/237) |
+| rn-fetch-blob, react-native-youtube, react-native-safari-view | various | unmaintained: switch to a maintained fork or alternative |
+
+Upgrade once a release includes the fix. A blob-util and a google-mobile-ads crash were reproduced on a fresh React Native 0.88.0-rc.4 app in the iOS simulator; the others use the same call.
+
+**Quickest workaround, in your app.** Give the AppDelegate its \`window\` property back and set it from the scene delegate, so every library finds a window without patches:
+
+\`\`\`
+// AppDelegate.swift
+var window: UIWindow?
+
+// SceneDelegate.swift, after creating the window
+(UIApplication.shared.delegate as? AppDelegate)?.window = window
+\`\`\`
+
+**Or fix the library with patch-package.** In the library's iOS file, replace the window lookup with React Native's helpers from \`<React/RCTUtils.h>\`, which work with and without scenes:
+
+\`\`\`
+- UIViewController *root = [UIApplication sharedApplication].delegate.window.rootViewController;
++ UIViewController *root = RCTKeyWindow().rootViewController;
+\`\`\`
+
+When the code then walks \`presentedViewController\` to the top, \`RCTPresentedViewController()\` does both in one call. Add \`#import <React/RCTUtils.h>\` if the file doesn't have it, then \`npx patch-package <library>\`.
+
+**Find the library.** The crash log names the method that sent the message. Or search your dependencies:
+
+\`\`\`
+grep -rnE "delegate\]?\.window|delegate\] window\]" node_modules/*/ios node_modules/@*/*/ios
+\`\`\`
+
+\`npx nativekeel\` lists the known ones from your package.json, with when each one crashes.
+`,
+    sources: [['Apple TN3187: Migrating to the UIKit scene-based life cycle', 'https://developer.apple.com/documentation/technotes/tn3187-migrating-to-the-uikit-scene-based-life-cycle'], ['React Native RCTUtils.h (RCTKeyWindow, RCTPresentedViewController)', 'https://github.com/facebook/react-native/blob/main/packages/react-native/React/Base/RCTUtils.h']],
+  },
+  {
+    slug: 'rcteventemitter-receiveevent-not-registered',
+    updated: '2026-10-15',
+    error: 'Failed to call into JavaScript module method RCTEventEmitter.receiveEvent(). Module has not been registered as callable.',
+    title: 'RCTEventEmitter.receiveEvent() not callable in React Native',
+    description: '"Failed to call into JavaScript module method RCTEventEmitter.receiveEvent()" after a React Native 0.77+ upgrade: the missing AppDelegate line and the fix.',
+    body: `
+After upgrading to React Native 0.77 or later with the New Architecture, a screen that uses a library's native component fails with:
+
+\`\`\`
+Error: Failed to call into JavaScript module method RCTEventEmitter.receiveEvent(). Module has not been registered as callable. Registered callable JavaScript modules (n = 9): AppRegistry, HMRClient, ...
+\`\`\`
+
+It often shows up right after wrapping the app in a provider such as \`SafeAreaProvider\`, and removing the provider makes it go away, so it looks like a bug in that library. In Release builds it can be a crash at launch.
+
+**Why.** Since React Native 0.77, \`AppDelegate\` must hand third-party Fabric components to React Native through \`RCTAppDependencyProvider\`. The release notes call it "a new line in the community template that, if missed, can cause some runtime issues". Without it, library components fall back to the legacy interop layer, which sends events through \`RCTEventEmitter\`, a module the New Architecture never registers. Projects upgraded by hand, or whose AppDelegate was customised, often miss the line.
+
+**Fix.** Add it to your AppDelegate.
+
+Objective-C (\`AppDelegate.mm\`), before calling \`super\`:
+
+\`\`\`
+#import <ReactAppDependencyProvider/RCTAppDependencyProvider.h>
+
+self.dependencyProvider = [RCTAppDependencyProvider new];
+\`\`\`
+
+Swift, React Native 0.77 and 0.78 (\`class AppDelegate: RCTAppDelegate\`):
+
+\`\`\`
+import ReactAppDependencyProvider
+
+self.dependencyProvider = RCTAppDependencyProvider()
+\`\`\`
+
+Swift, React Native 0.79 and later (\`RCTReactNativeFactory\`):
+
+\`\`\`
+import ReactAppDependencyProvider
+
+delegate.dependencyProvider = RCTAppDependencyProvider()
+\`\`\`
+
+Then \`cd ios && pod install\` and rebuild. Clearing caches or reinstalling pods alone does not fix it.
+
+**Check your project.** \`npx nativekeel\` reports an AppDelegate without \`RCTAppDependencyProvider\` on React Native 0.77 and later, before the error appears.
+`,
+    sources: [['React Native 0.77 release notes: RCTAppDependencyProvider', 'https://reactnative.dev/blog/2025/01/21/version-0.77#rctappdependencyprovider'], ['React Native template 0.81: AppDelegate.swift', 'https://github.com/react-native-community/template/blob/0.81-stable/template/ios/HelloWorld/AppDelegate.swift']],
+  },
+  {
+    slug: 'interactionmanager-removed-react-native-0-87',
+    updated: '2026-10-16',
+    error: 'InteractionManager has been removed from react-native core.',
+    title: 'InteractionManager removed in React Native 0.87: the fix',
+    description: 'React Native 0.87 removed InteractionManager. The error in debug and release builds, and how to move runAfterInteractions to requestIdleCallback.',
+    body: `
+After upgrading to React Native 0.87 (or Expo SDK 58), code that waits for animations with \`InteractionManager\` stops working. A development build shows a red screen:
+
+\`\`\`
+Invariant Violation: InteractionManager has been removed from react-native core. Please refactor long tasks into smaller ones, and use 'requestIdleCallback' instead.
+\`\`\`
+
+A release build has no such message: the import is \`undefined\`, so the first call fails with \`TypeError: Cannot read property 'runAfterInteractions' of undefined\` and the screen (or the app) crashes.
+
+**Why.** The React Native 0.87 release notes list it under API removals: "Removed \`InteractionManager\` — use \`requestIdleCallback\` instead." The development message comes from a getter React Native 0.87 keeps on the \`react-native\` export only in development builds.
+
+**Fix.** \`requestIdleCallback\` is a global in React Native; there is nothing to import.
+
+\`\`\`
+- import { InteractionManager } from 'react-native';
+-
+- const task = InteractionManager.runAfterInteractions(() => loadData());
+- return () => task.cancel();
++ const id = requestIdleCallback(() => loadData());
++ return () => cancelIdleCallback(id);
+\`\`\`
+
+\`runAfterInteractions\` also returned a promise-like task (\`.then()\`, \`.done()\`). If your code awaited it, wrap the callback: \`await new Promise((resolve) => requestIdleCallback(resolve))\`. \`createInteractionHandle\` and \`clearInteractionHandle\` are gone with it; split the long work into smaller steps instead, as the error message suggests.
+
+If the call is inside a library rather than your code, update the library; patch it (patch-package) only if no release has the change yet.
+
+**Check your project.** \`npx nativekeel\` lists the files that use \`InteractionManager\`: before the upgrade as work for 0.87, and after it as a crash with the file and line.
+`,
+    sources: [['React Native 0.87 release notes: API removals', 'https://reactnative.dev/blog/2026/08/11/react-native-0.87#api-removals'], ['React Native 0.87.1 index.js (the development error)', 'https://github.com/facebook/react-native/blob/v0.87.1/packages/react-native/index.js']],
+  },
+  {
+    slug: 'rctcomponent-h-file-not-found-react-native-0-87',
+    updated: '2026-10-16',
+    error: "'RCTComponent.h' file not found",
+    title: "'RCTBridge.h' file not found after React Native 0.87",
+    description: "iOS build fails with 'RCTComponent.h' or 'RCTBridge.h' file not found after React Native 0.87: which libraries cause it, the fix and a workaround.",
+    body: `
+After upgrading to React Native 0.87 or 0.88 (Expo SDK 58), the iOS build stops inside a library:
+
+\`\`\`
+node_modules/react-native-date-picker/ios/DatePicker.m:7:9: error: 'RCTComponent.h' file not found
+node_modules/@react-native-menu/menu/ios/MenuViewManager.mm:3:9: 'RCTBridge.h' file not found
+\`\`\`
+
+**Why.** React Native 0.87 ships its iOS headers as header-only XCFrameworks. The release notes: "The one consumer-facing change is bare-form angle includes — if you import a React Native header without its namespace, add it". We compiled every \`RCT*.h\` header of React Native 0.87.1 on its own, in both setups:
+
+| Import | Default (prebuilt React Native) | React Native built from source |
+|---|---|---|
+| \`#import <React/RCTBridge.h>\` | works | works |
+| \`#import "RCTBridge.h"\` | **file not found** | works |
+| \`#import <RCTBridge.h>\` | **file not found** | **file not found** |
+
+A few headers still resolve in quotes (\`RCTFabricComponentsPlugins.h\`, \`RCTComponentViewHelpers.h\` and the CoreModules headers), which is why many Fabric libraries are unaffected. An import inside an \`#if __has_include(...)\` fallback is also fine: the compiler takes the \`<React/...>\` branch.
+
+**Libraries that hit it.** From the 248 most downloaded React Native libraries with iOS code, checked on 16 October 2026:
+
+| Library (version) | Import | Status |
+|---|---|---|
+| react-native-date-picker 5.0.13 | "RCTComponent.h", "RCTConvert.h" | [issue #974](https://github.com/henninghall/react-native-date-picker/issues/974), not released |
+| @react-native-menu/menu 2.0.0 | "RCTBridge.h" | [issue #1221](https://github.com/react-native-menu/menu/issues/1221), not released |
+| react-native-bottom-tabs 1.4.0 | "RCTConversions.h" | [fixed on main](https://github.com/callstack/react-native-bottom-tabs/issues/584), next release |
+| react-native-ios-context-menu 3.2.1 | "RCTBridge.h" | same import, no report yet |
+| react-native-ios-utilities 5.2.0 | "RCTBridge.h" | same import, no report yet |
+
+**Fix.** Update the library if a release has the change. Otherwise add the namespace yourself and keep it with patch-package:
+
+\`\`\`
+- #import "RCTComponent.h"
++ #import <React/RCTComponent.h>
+\`\`\`
+
+\`\`\`
+npx patch-package react-native-date-picker
+\`\`\`
+
+If your own iOS code (AppDelegate, native modules) has the same imports, change them the same way.
+
+**Workaround while you wait.** Building React Native from source still resolves the quoted form, at the cost of much slower clean builds. Bare CLI: \`RCT_USE_PREBUILT_RNCORE=0 bundle exec pod install\`. Expo: set \`buildReactNativeFromSource: true\` under \`ios\` in the \`expo-build-properties\` plugin, then prebuild again. It does not help with \`#import <RCTBridge.h>\`.
+
+**Check your project.** \`npx nativekeel\` reads the iOS sources of your installed libraries and your own code. Before the upgrade it lists them as work for 0.87; after it, as the reason the build fails, with file and line.
+`,
+    sources: [['React Native 0.87 release notes: Headers Breaking Changes', 'https://reactnative.dev/blog/2026/08/11/react-native-0.87#headers-breaking-changes'], ['Expo: expo-build-properties, buildReactNativeFromSource', 'https://docs.expo.dev/versions/latest/sdk/build-properties/']],
+  },
+  {
     slug: 'supabase-rls-disabled',
     error: 'Supabase: RLS disabled in public (0013_rls_disabled_in_public)',
-    title: 'Supabase tables without row level security in a React Native app',
+    title: 'Supabase tables without row level security in React Native',
     description: 'Why a Supabase table without row level security is readable by anyone who has your React Native or Expo app, and how to enable RLS with policies.',
     body: `
 Supabase's security advisor reports it as lint \`0013_rls_disabled_in_public\`.
@@ -216,7 +460,7 @@ With RLS on and no policy, nobody can read the table through the API, so add pol
   {
     slug: 'app-store-account-deletion-5-1-1-v',
     error: 'Guideline 5.1.1(v): the app supports account creation but does not include an option to initiate account deletion',
-    title: 'App Store rejection 5.1.1(v): account deletion in a React Native app',
+    title: 'App Store 5.1.1(v) account deletion: React Native fix',
     description: 'Why Apple rejects React Native and Expo apps under guideline 5.1.1(v), what counts as account deletion, and what Google Play asks for as well.',
     body: `
 The rejection reads:
@@ -238,8 +482,8 @@ The app supports account creation but does not include an option to initiate acc
   {
     slug: 'app-store-sign-in-with-apple-4-8',
     error: 'Guideline 4.8 - Design - Login Services',
-    title: 'App Store rejection 4.8 (Login Services): Sign in with Apple in a React Native app',
-    description: 'Why an iOS app with Google or Facebook login is rejected under App Store guideline 4.8, the exceptions, and how to add Sign in with Apple in React Native and Expo.',
+    title: 'App Store 4.8: Sign in with Apple in React Native',
+    description: 'Why iOS apps with Google or Facebook login are rejected under App Store guideline 4.8, exceptions, and how to add Sign in with Apple in React Native and Expo.',
     body: `
 **What the guideline says.** Apps that use a third-party or social login (Google, Facebook, Log in with X and others) to set up or authenticate the user's primary account must also offer an equivalent login that:
 
@@ -266,7 +510,7 @@ Enable the Sign in with Apple capability for the app ID, show Apple's button nex
   {
     slug: 'google-play-target-api-level',
     error: 'Your app currently targets API level 34 and must target at least API level 36',
-    title: 'Google Play: "must target at least API level" in a React Native app',
+    title: 'Google Play "must target at least API level": React Native',
     description: 'What Google Play\'s target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.',
     body: `
 Play Console shows:
@@ -345,6 +589,45 @@ Build with \`./gradlew bundleRelease\` and upload the \`.aab\`. With Play App Si
 **How common it is.** In our scan of 653 open-source React Native apps, 62 sign release builds with the debug key and do not sign them elsewhere. \`npx nativekeel\` reports it, together with signing passwords or keystores committed to the repository.`,
     sources: [['React Native: publishing to Google Play Store', 'https://reactnative.dev/docs/signed-apk-android'], ['Android: sign your app', 'https://developer.android.com/studio/publish/app-signing']],
   },
+  {
+    slug: 'uiscene-life-cycle-required-xcode-27',
+    error: 'UIScene life cycle is required for apps built with this SDK',
+    title: 'Xcode 27 "UIScene life cycle is required": React Native fix',
+    description: 'Why a React Native or Expo app stops at launch when built with Xcode 27 and the iOS 27 SDK, the April 2027 App Store deadline, and how to adopt UIScene.',
+    body: `
+**What it means.** Built with the iOS 27 SDK (Xcode 27), an app that has not adopted the UIKit scene life cycle stops right at launch:
+
+\`\`\`
+Application failed to launch: UIScene life cycle is required for apps built with this SDK.
+\`\`\`
+
+Apple announced it in TN3187: from the first major release after iOS 26, building with the latest SDK requires the scene life cycle. The check depends on the SDK you build with, not the user's iOS version. The same app built with Xcode 26 still runs on iOS 27, so the problem only shows up when you move to Xcode 27. App Store Connect requires the iOS 27 SDK for uploads from **April 2027**.
+
+**Have you adopted it?** You have if your \`Info.plist\` has a \`UIApplicationSceneManifest\` with scene configurations, or your app delegate implements \`application(_:configurationForConnecting:options:)\`. A manifest that only sets \`UIApplicationSupportsMultipleScenes\` does not count.
+
+**React Native.** 0.88 is the first release whose template adopts it. Its \`SceneDelegate.swift\` starts React Native in the window scene, and \`Info.plist\` names it in the scene manifest. React Native 0.87 and earlier have no scene support in the template. Upgrade, then copy both from the Upgrade Helper.
+
+**Expo.** On SDK 57, opt in with expo 57.0.23+ and expo-build-properties 57.0.20+:
+
+\`\`\`
+["expo-build-properties", { "ios": { "enableSceneSupport": true } }]
+\`\`\`
+
+Then run prebuild again. SDK 58 has it by default. SDK 56 and earlier need an upgrade.
+
+**Two things break after the move.**
+
+- **Deep links and universal links** stop reaching \`AppDelegate\`. Forward \`scene(_:openURLContexts:)\` and \`scene(_:continue:)\` to \`RCTLinkingManager\` in \`SceneDelegate\`, and pass the connection options to React Native so links that launch the app arrive too. The 0.88 template does both.
+- **Libraries that read the window from the app delegate crash.** The 0.88 template's \`AppDelegate\` has no \`window\`. We reproduced \`-[AppDelegate window]: unrecognized selector sent to instance\` on that template with react-native-blob-util and react-native-google-mobile-ads, and the same Objective-C call is in about a dozen popular packages, including @react-native-firebase/messaging at launch. Until they are fixed, keep \`var window: UIWindow?\` in \`AppDelegate\` and set it from \`SceneDelegate\`. [Which libraries, and their fixes](/fix/appdelegate-window-unrecognized-selector).
+
+**How common it is.** 583 of the 628 open-source React Native and Expo apps with an iOS target in our scan (11 October 2026) have not adopted it yet. \`npx nativekeel\` reports it, the links that still go to \`AppDelegate\`, and the installed libraries that read the app delegate's window. A longer walkthrough, with the 15 libraries that crash after the move and the deep-link pitfall, is on [dev.to](https://dev.to/keel_alican_akyol/xcode-27-wont-launch-93-of-react-native-apps-the-uiscene-change-and-the-libraries-that-crash-2gb5).`,
+    sources: [
+      ['Apple TN3187: Migrating to the UIKit scene-based life cycle', 'https://developer.apple.com/documentation/technotes/tn3187-migrating-to-the-uikit-scene-based-life-cycle'],
+      ['Apple: upcoming App Store requirements (iOS 27 SDK from April 2027)', 'https://developer.apple.com/news/?id=k1mtkt1k'],
+      ['React Native 0.88 template: SceneDelegate.swift', 'https://github.com/react-native-community/template/blob/0.88-stable/template/ios/HelloWorld/SceneDelegate.swift'],
+      ['Expo: Xcode 27 support for SDK 57', 'https://github.com/expo/expo/issues/46664#issuecomment-5683396867'],
+    ],
+  },
 ];
 
 const STYLE = `:root{--bg:#fbfaf7;--text:#15171b;--muted:#5d6470;--accent:#0b5d55;--line:#e3e1db;--card:#ffffff;--code:#f1efea}
@@ -356,7 +639,7 @@ h1{font-size:28px;line-height:1.25;margin:0 0 6px}h2{font-size:18px;margin:28px 
 code{font:14px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:1px 5px;border-radius:5px}
 pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto}pre code{background:none;padding:0;white-space:pre-wrap}
 .cta{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:28px 0}.cta code{font-size:15px}
-.meta{font-size:14px;color:var(--muted)}ul.list li{margin:8px 0}`;
+.meta{font-size:14px;color:var(--muted)}ul.list li{margin:8px 0}table{border-collapse:collapse;width:100%;font-size:15px;margin:12px 0;display:block;overflow-x:auto}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{font-weight:600}`;
 
 const head = (title, description, url) => `<!doctype html>
 <html lang="en">
@@ -364,7 +647,7 @@ const head = (title, description, url) => `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
+<meta name="description" content="${attr(description)}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#0b5d55">
@@ -372,10 +655,11 @@ const head = (title, description, url) => `<!doctype html>
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="NativeKeel">
 <meta property="og:url" content="${url}">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(description)}">
+<meta property="og:title" content="${attr(title)}">
+<meta property="og:description" content="${attr(description)}">
 <meta property="og:image" content="${BASE}/og.png">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:description" content="${attr(description)}">
 <meta name="twitter:image" content="${BASE}/og.png">
 <style>${STYLE}</style>
 </head>`;
@@ -383,14 +667,14 @@ const head = (title, description, url) => `<!doctype html>
 fs.mkdirSync(path.join(SITE, 'fix'), { recursive: true });
 for (const p of PAGES) {
   const url = `${BASE}/fix/${p.slug}`;
-  const ld = { '@context': 'https://schema.org', '@type': 'TechArticle', headline: p.title, description: p.description, dateModified: UPDATED, author: { '@type': 'Organization', name: 'NativeKeel', url: BASE }, mainEntityOfPage: url };
+  const ld = { '@context': 'https://schema.org', '@type': 'TechArticle', headline: p.title, description: p.description, dateModified: p.updated || UPDATED, author: { '@type': 'Organization', name: 'NativeKeel', url: BASE }, mainEntityOfPage: url };
   const html = `${head(p.title, p.description, url)}
 <body><main>
 <p class="meta"><a href="/">NativeKeel</a> · <a href="/fix/">React Native fixes</a></p>
 <h1>${esc(p.error)}</h1>
-<p class="meta">Updated ${UPDATED}</p>
+<p class="meta">Updated ${p.updated || UPDATED}</p>
 ${md(p.body)}
-<div class="cta"><strong>Check your whole app in one command:</strong> <code>npx nativekeel</code><br><span class="meta">Free, runs locally (your code is not uploaded), no account. It reports this and 80 other upgrade, store, crash and security problems.</span></div>
+<div class="cta"><strong>Check your whole app in one command:</strong> <code>npx nativekeel</code><br><span class="meta">Free, runs locally (your code is not uploaded), no account. It reports this along with the other upgrade, store, crash and security problems it checks for.</span></div>
 <h2>Sources</h2>
 <ul>${p.sources.map(([t, u]) => `<li><a href="${u}">${esc(t)}</a></li>`).join('')}</ul>
 <script type="application/ld+json">${JSON.stringify(ld).replace(/</g, '\\u003c')}</script>

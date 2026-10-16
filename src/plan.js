@@ -1,7 +1,8 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
 import path from 'node:path';
 import { UPGRADE_HELPER_URL, NEW_ARCH_ONLY_MINOR } from './rules.js';
 import { SITE_URL } from './config.js';
+import { executionSafety } from './safety.js';
 import { COMPAT, bestRange } from './compat.js';
 import { compareVersions } from './known-issues.js';
 import { expoPinnedNames, movesWithExpoSdk } from './expo-pins.js';
@@ -69,6 +70,8 @@ const WEIGHTS = {
   'default-react-host': () => 0.25,
   crash: () => 1,
   performance: () => 0.5,
+  accessibility: () => 0.5,
+  'text-defaults': () => 1,
   security: () => 1,
   'vuln-dep': (f) => (f.severity === 'critical' || f.severity === 'high' ? 1 : 0.25),
 };
@@ -171,6 +174,11 @@ function bumpSteps(list, extra = () => '') {
 }
 
 export function buildPlan(result) {
+  const safety = executionSafety(result.findings);
+  if (safety.blocked) return { complexity: complexity(result.findings), phases: [{
+    title: 'Stop: inspect suspected malware', why: safety.warning,
+    steps: ['Keep this project closed in editors that run workspace tasks. Do not install dependencies or run its code. Review the malicious-code finding and restore a trusted copy before planning an upgrade.'],
+  }] };
   const isExpo = !!result.project.expo;
   const basePm = commands[packageManager(result.project.root)];
   // In Expo projects `npx expo install` picks the version that matches the SDK.
@@ -245,14 +253,15 @@ export function buildPlan(result) {
     });
   }
 
-  const unusedDeps = byKind('remove-dep');
-  if (unusedDeps.length) {
+  const reviewDeps = [...byKind('review-dep'), ...byKind('remove-dep')];
+  if (reviewDeps.length) {
     phases.push({
-      title: 'Remove unused packages',
-      why: 'Every package you delete is one you never have to upgrade. Native modules also cut build time.',
+      title: 'Review dependency usage before removal',
+      why: 'A static scan can miss dynamic, generated and native registration paths. These candidates are not confirmed unused.',
       steps: [
-        `\`${pm.remove} ${unusedDeps.map((d) => d.name).join(' ')}\`${unusedDeps.some((d) => d.native) ? ', then reinstall pods' : ''}.`,
-        'Search the code once more for each name before removing it (dynamic requires are invisible to static analysis), then build both platforms.',
+        `Review ${reviewDeps.map((d) => `\`${d.name}\``).join(', ')} across every platform, build configuration, script and generated source. Keep packages with unresolved usage.`,
+        'Only after confirming no required use, try one removal at a time on a separate branch. Re-resolve dependencies, build supported targets and run the affected behavior tests; revert if required behavior changes.',
+        'Compare the actual release artifacts before claiming a size saving. A package can remain as a transitive dependency.',
       ],
     });
   }
@@ -560,6 +569,21 @@ export function buildPlan(result) {
     phases.push({ title: `Upgrade Expo SDK ${expo.from} → ${expo.to}`, why: 'Expo only supports one SDK step at a time reliably.', steps });
   }
 
+  const upcoming = byKind('upcoming')[0];
+  if (upcoming) {
+    const order = { removed: 0, tooling: 1, behavior: 2 };
+    const changes = [...upcoming.changes].sort((a, b) => order[a.kind] - order[b.kind]);
+    const versions = [...new Set(changes.map((c) => c.version))];
+    const prerelease = versions.filter((v) => /beta|release candidate/.test(v)).map((v) => v.replace(/ \(.*\)$/, ''));
+    const steps = changes.map((c) => `${c.kind === 'behavior' ? 'Test: ' : ''}**${c.title}** (${c.hits.join(', ')}). ${c.action} [release notes](${c.source})`);
+    if (prerelease.length) steps.push(`${prerelease.join(' and ')} ${prerelease.length === 1 ? 'is' : 'are'} not final yet: these come from the pre-release notes, so prepare now and check the final release notes when you move.`);
+    phases.push({
+      title: `What changes in ${versions.join(' and ')} for this app`,
+      why: 'Release notes list everything; these are the changes that touch this app\'s own code and settings, so you can fix them in the same commit as the upgrade instead of finding them in a crash report.',
+      steps,
+    });
+  }
+
   if (jsAbandoned.length) {
     phases.push({
       title: 'Plan replacements for abandoned JavaScript packages',
@@ -569,6 +593,24 @@ export function buildPlan(result) {
         if (owned) return `\`${d.name}\`: you already use \`${owned}\`; move the remaining usage there, then \`${pm.remove} ${d.name}\`.`;
         return `\`${d.name}\`${d.alternatives.length ? `: options ${d.alternatives.map((a) => `\`${a}\``).join(', ')}` : ': look for a maintained alternative, or keep it if it does what you need'}.`;
       }),
+    });
+  }
+
+  const textDefaults = byKind('text-defaults');
+  if (textDefaults.length) {
+    phases.push({
+      title: 'Move Text defaults into your own component',
+      why: 'React 19 (React Native 0.78+) ignores Text.defaultProps in JSX, so app-wide fonts and text scaling settings silently stop applying.',
+      steps: [...textDefaults.map((t) => t.step), 'Check the main screens at the default and the largest system text size.'],
+    });
+  }
+
+  const a11y = byKind('accessibility');
+  if (a11y.length) {
+    phases.push({
+      title: 'Make it usable with a screen reader and large text',
+      why: 'Unlabeled buttons and fixed text sizes lock out people who use VoiceOver, TalkBack or larger text. In the EU, the European Accessibility Act applies to shopping and consumer banking apps since June 2025.',
+      steps: [...a11y.map((a) => a.step), 'Go through the main flows once with VoiceOver and once with TalkBack, and once at the largest text size.'],
     });
   }
 
@@ -643,7 +685,7 @@ export function planToMarkdown(result, plan) {
     phase.steps.forEach((s) => lines.push(`- [ ] ${s}`));
     lines.push('');
   });
-  lines.push('---', `No time to do it yourself? We do fixed-price upgrades on a branch of your repo: ${SITE_URL}/#services`);
+  lines.push('---', `Prefer to hand the upgrade over? ${SITE_URL}/#help`);
   return `${lines.join('\n')}\n`;
 }
 
@@ -663,7 +705,7 @@ const PHASE_KINDS = {
   'Fix the iOS AppDelegate': ['app-dependency-provider'],
   'Replace blocking and abandoned packages': ['replace-dep'],
   'Remove legacy tooling': ['deprecated-core', 'remove-flipper', 'podfile-cli-require', 'rctappdelegate', 'enable-hermes', 'folly-flags', 'patch-artifacts', 'patch-version', 'default-react-host'],
-  'Remove unused packages': ['remove-dep'],
+  'Review dependency usage before removal': ['review-dep', 'remove-dep'],
 };
 
 export function startHere(result, count = 3) {

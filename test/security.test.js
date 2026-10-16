@@ -1,6 +1,7 @@
 import test from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { passwordLeaks, webViewRisks, androidBackup, vulnerableDependencies } from '../src/security.js';
+import { passwordLeaks, webViewRisks, androidBackup, vulnerableDependencies, tokenStorage } from '../src/security.js';
 import { lockedVersions } from '../src/lockfile.js';
 import { createRegistry } from '../src/registry.js';
 import { makeProject } from './helpers.js';
@@ -44,8 +45,21 @@ test('a password on a nearby line of an unrelated call is not a leak', () => {
 });
 
 test('WebView file access and mixed content', () => {
-  const root = makeProject({ 'package.json': '{}', 'src/W.js': "import { WebView } from 'react-native-webview';\n<WebView allowUniversalAccessFromFileURLs={true} mixedContentMode=\"always\" />" });
+  const root = makeProject({ 'package.json': '{}', 'src/W.js': "import { WebView } from 'react-native-webview';\n<WebView source={{ uri: 'file://' + dir + '/page.html' }} allowUniversalAccessFromFileURLs={true} mixedContentMode=\"always\" />" });
   assert.deepEqual(webViewRisks(root).map((f) => f.severity).sort(), ['high', 'medium']);
+});
+
+test('file-URL flags on a WebView that only loads web URLs do nothing today', () => {
+  const remote = makeProject({ 'package.json': '{}', 'src/W.js': "import { WebView } from 'react-native-webview';\nconst P = ({ originWhitelist = ['file://*', 'https://*'] }) => <WebView allowUniversalAccessFromFileURLs originWhitelist={originWhitelist} source={{ uri: partnerUrl }} />;" });
+  assert.deepEqual(webViewRisks(remote).map((f) => f.severity), ['low'], 'Edge partner pages; originWhitelist is not a page');
+  const inline = makeProject({ 'package.json': '{}', 'src/W.js': "import { WebView } from 'react-native-webview';\n<WebView allowFileAccessFromFileURLs source={{ html: content }} />" });
+  assert.deepEqual(webViewRisks(inline).map((f) => f.severity), ['high']);
+  const imported = makeProject({
+    'package.json': '{}',
+    'src/source.ts': "export const EDITOR_URI = Platform.OS === 'android' ? 'file:///android_asset/index.html' : 'build.bundle/index.html';",
+    'src/Editor.tsx': "import { WebView } from 'react-native-webview';\nimport { EDITOR_URI } from './source';\n<WebView allowUniversalAccessFromFileURLs source={{ uri: EDITOR_URI }} />",
+  });
+  assert.deepEqual(webViewRisks(imported).map((f) => f.severity), ['high'], 'Notesnook: the local address is in an imported file');
 });
 
 test('Android backups: flagged only without backup rules', () => {
@@ -64,12 +78,13 @@ test('vulnerable dependencies: exact versions, highest severity, fixed version',
         { title: 'Prototype pollution', severity: 'high', vulnerable_versions: '<0.30.0', url: 'https://github.com/advisories/1' },
         { title: 'ReDoS', severity: 'moderate', vulnerable_versions: '<0.21.2', url: 'https://github.com/advisories/2' },
         { title: 'Old', severity: 'critical', vulnerable_versions: '<0.10.0', url: 'https://github.com/advisories/3' },
+        { title: 'Axios: no_proxy bypass via IP alias allows SSRF', severity: 'high', vulnerable_versions: '<0.30.0', url: 'https://github.com/advisories/4' },
       ],
     };
   });
   const [f] = await vulnerableDependencies(registry, { axios: '0.21.0' });
   assert.equal(f.severity, 'high', 'the critical one does not apply to 0.21.0');
-  assert.match(f.title, /axios 0\.21\.0: 2 known vulnerabilities/);
+  assert.match(f.title, /axios 0\.21\.0: 2 known vulnerabilities \(\+1 for Node\.js only\)/, 'the proxy advisory cannot reach a React Native app');
   assert.equal(f.fix.to, '0.30.0');
 });
 
@@ -173,6 +188,7 @@ test('weak crypto: real uses, not comments or non-security randomness', async ()
   assert.deepEqual(ids('const body = { password: md5(passWord) };'), ['crypto-weak-password-hash']);
   assert.deepEqual(ids('// D1 = MD5( password || salt )\n/* sha1(password) */'), []);
   assert.deepEqual(ids('const nonce = Math.random().toString(16);'), ['crypto-insecure-random']);
+  assert.deepEqual(ids('// Dummy response for the test server\nconst ts = Date.now();\nconst nonce = `nonce_${Math.random().toString(36)}`;'), [], 'a nonce in a dummy response protects nothing');
   assert.deepEqual(ids('const token = Math.floor(Math.random() * 1e9); // cache bust'), []);
 });
 
@@ -312,4 +328,57 @@ test('react-native-blob-util trust manager: unused, behind a setting, or always 
   assert.equal(app(null).length, 0, 'never used by any request');
   assert.equal(app('ReactNativeBlobUtil.config({ trusty: !certVerification }).fetch("GET", url);')[0].severity, 'high');
   assert.equal(app('ReactNativeBlobUtil.config({ trusty: true }).fetch("GET", url);')[0].severity, 'critical');
+});
+
+test('AI provider keys read from build-time variables ship inside the app', async () => {
+  const { aiKeysInBundle } = await import('../src/security.js');
+  const run = (files, deps) => aiKeysInBundle(makeProject({ 'package.json': '{}', ...files }), deps);
+  const groq = run({ 'utils/ai/client.ts': "const key = () => process.env.EXPO_PUBLIC_GROQ_API_KEY || '';\nfetch('https://api.groq.com/openai/v1/chat/completions', { headers: { Authorization: `Bearer ${key()}` } });" }, { expo: '~54.0.0' });
+  assert.equal(groq.length, 1);
+  assert.equal(groq[0].severity, 'high');
+  assert.match(groq[0].title, /^Groq API key ships inside the app \(utils\/ai\/client\.ts:1\)/);
+  assert.match(groq[0].detail, /calls Groq directly/);
+  assert.equal(run({ 'src/a.ts': 'const k = process.env.EXPO_PUBLIC_OPENAI_API_KEY;' }, {}).length, 0, 'not an Expo app: nothing inlines it');
+  assert.equal(run({ 'server/ai.ts': 'const k = process.env.EXPO_PUBLIC_OPENAI_API_KEY;', 'app/chat+api.ts': 'const k = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;' }, { expo: '~54.0.0' }).length, 0, 'server code and Expo API routes stay on the server');
+  assert.equal(run({ 'src/a.ts': '// const k = process.env.EXPO_PUBLIC_OPENAI_API_KEY;\nconst m = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;' }, { expo: '~54.0.0' }).length, 0, 'comments and non-AI keys');
+  const dotenv = run({ 'services/t.js': "import { OPENAI_API_KEY, API_URL } from '@env';" }, { 'react-native-dotenv': '^3.4.0' });
+  assert.match(dotenv[0].detail, /react-native-dotenv/);
+  const config = run({ 'src/api.ts': "import Config from 'react-native-config';\nconst k = Config.GEMINI_API_KEY;" }, { 'react-native-config': '^1.5.0' });
+  assert.match(config[0].title, /^Google Gemini API key/);
+});
+
+test('wallet secrets copied to the clipboard', async () => {
+  const { clipboardSecrets } = await import('../src/security.js');
+  const run = (src) => clipboardSecrets(makeProject({ 'package.json': '{}', 'src/a.tsx': src }));
+  assert.equal(run("import Clipboard from '@react-native-clipboard/clipboard';\nClipboard.setString(seed.join(' '));").length, 1);
+  assert.equal(run("import * as Clipboard from 'expo-clipboard';\nawait Clipboard.setStringAsync(type === 'privateKey' ? privateKey : publicKey);").length, 1, 'a private key next to a public one');
+  assert.equal(run("Clipboard.setString(displayPublicSeed);").length, 0, 'a public seed');
+  assert.equal(run("Clipboard.setString(address);").length, 0);
+  assert.equal(run("Clipboard.setString(mnemonic);\ntimer.current = setTimeout(() => { Clipboard.setString(''); }, 60000);").length, 0, 'cleared again after a minute');
+  assert.equal(run("// Clipboard.setString(mnemonic);").length, 0, 'comments');
+});
+
+test('keychain items readable while the device is locked', async () => {
+  const { keychainAccessibility } = await import('../src/security.js');
+  const run = (files) => keychainAccessibility(makeProject({ 'package.json': '{}', ...files }));
+  assert.equal(run({ 'src/store.ts': "await Keychain.setGenericPassword('u', pw, { accessible: Keychain.ACCESSIBLE.ALWAYS });" }).length, 1);
+  assert.equal(run({ 'src/keys.ts': 'await SecureStore.setItemAsync(k, v, { keychainAccessible: SecureStore.ALWAYS_THIS_DEVICE_ONLY });' }).length, 1);
+  assert.equal(run({ 'ios/App/Store.swift': 'let q: [String: Any] = [kSecAttrAccessible as String: kSecAttrAccessibleAlways]' }).length, 1);
+  assert.equal(run({ 'src/store.ts': 'await Keychain.setGenericPassword(u, pw, { accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });' }).length, 0);
+  assert.equal(run({ 'packages/react-native-keychain-9/src/index.ts': 'ACCESSIBLE.ALWAYS' }).length, 0, "a vendored library's own table");
+  assert.equal(run({ 'ios/Lib/SecureStorage.m': '@"AccessibleAlways": (__bridge NSString *)kSecAttrAccessibleAlways,' }).length, 0, 'a name-to-constant table');
+  assert.equal(run({ 'config/test/native.ts': "ACCESSIBLE: { ALWAYS_THIS_DEVICE_ONLY: 'x' }, use(ACCESSIBLE.ALWAYS)" }).length, 0, 'test config');
+});
+
+test('token storage: auth tokens are reported; push and invitation tokens behind constants are not', () => {
+  const root = makeProject({
+    'package.json': { name: 'x', dependencies: { 'react-native': '0.80.0' } },
+    'src/auth.ts': "import AsyncStorage from '@react-native-async-storage/async-storage';\nconst KEY = 'session';\nexport const save = (accessToken) => AsyncStorage.setItem(KEY, accessToken);",
+    'src/services/pushRegistration.ts': "import AsyncStorage from '@react-native-async-storage/async-storage';\nconst SYNCED_KEY = 'AppPushTokenSynced';\nexport const mark = (reg) => AsyncStorage.setItem(SYNCED_KEY, reg.token);",
+    'src/invites.ts': "import AsyncStorage from '@react-native-async-storage/async-storage';\nconst PENDING = 'app:pendingInvitationToken';\nexport const keep = (token) => AsyncStorage.setItem(PENDING, token);",
+  });
+  try {
+    const [f] = tokenStorage(root);
+    assert.match(f.detail, /^KEY \(src\/auth\.ts:3\)\. /);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

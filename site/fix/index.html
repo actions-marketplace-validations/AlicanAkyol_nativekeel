@@ -16,6 +16,7 @@
 <meta property="og:description" content="Build errors, App Store and Google Play rejections and crashes that React Native and Expo apps hit, with the cause, the fix and sources.">
 <meta property="og:image" content="https://nativekeel.com/og.png">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:description" content="Build errors, App Store and Google Play rejections and crashes that React Native and Expo apps hit, with the cause, the fix and sources.">
 <meta name="twitter:image" content="https://nativekeel.com/og.png">
 <style>:root{--bg:#fbfaf7;--text:#15171b;--muted:#5d6470;--accent:#0b5d55;--line:#e3e1db;--card:#ffffff;--code:#f1efea}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1013;--text:#e9ebef;--muted:#9aa2ad;--accent:#3cc4b4;--line:#262a31;--card:#15181d;--code:#1b1f25}}
@@ -26,7 +27,7 @@ h1{font-size:28px;line-height:1.25;margin:0 0 6px}h2{font-size:18px;margin:28px 
 code{font:14px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:1px 5px;border-radius:5px}
 pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto}pre code{background:none;padding:0;white-space:pre-wrap}
 .cta{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:28px 0}.cta code{font-size:15px}
-.meta{font-size:14px;color:var(--muted)}ul.list li{margin:8px 0}</style>
+.meta{font-size:14px;color:var(--muted)}ul.list li{margin:8px 0}table{border-collapse:collapse;width:100%;font-size:15px;margin:12px 0;display:block;overflow-x:auto}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{font-weight:600}</style>
 </head>
 <body><main>
 <p class="meta"><a href="/">NativeKeel</a></p>
@@ -37,11 +38,17 @@ pre{background:var(--code);border:1px solid var(--line);border-radius:10px;paddi
 <li><a href="/fix/missing-foreground-service-type">MissingForegroundServiceTypeException</a><br><span class="meta">Why a React Native app crashes with MissingForegroundServiceTypeException after targeting Android 14, and how to declare the foreground service type.</span></li>
 <li><a href="/fix/expo-packages-should-be-updated">The following packages should be updated for best compatibility with the installed expo version</a><br><span class="meta">What Expo's "packages should be updated for best compatibility with the installed expo version" warning means, when it causes crashes, and the one-command fix.</span></li>
 <li><a href="/fix/imagebackground-safeareaview-deprecated">ImageBackground is deprecated and will be removed in a future release</a><br><span class="meta">React Native 0.87 deprecated ImageBackground (and 0.81 SafeAreaView). Why SafeAreaView already misbehaves on Android 15, and drop-in replacements for both.</span></li>
+<li><a href="/fix/text-defaultprops-react-19">Text.defaultProps has no effect after upgrading to React Native 0.78 (React 19)</a><br><span class="meta">React 19 ignores Text.defaultProps in React Native 0.78+: app-wide fonts and font-scaling limits stop applying with no error. Why, and the fix.</span></li>
+<li><a href="/fix/appdelegate-window-unrecognized-selector">-[AppDelegate window]: unrecognized selector sent to instance</a><br><span class="meta">Why a React Native or Expo app crashes with "-[AppDelegate window]: unrecognized selector" after adopting UIScene, which libraries cause it, and the fix.</span></li>
+<li><a href="/fix/rcteventemitter-receiveevent-not-registered">Failed to call into JavaScript module method RCTEventEmitter.receiveEvent(). Module has not been registered as callable.</a><br><span class="meta">"Failed to call into JavaScript module method RCTEventEmitter.receiveEvent()" after a React Native 0.77+ upgrade: the missing AppDelegate line and the fix.</span></li>
+<li><a href="/fix/interactionmanager-removed-react-native-0-87">InteractionManager has been removed from react-native core.</a><br><span class="meta">React Native 0.87 removed InteractionManager. The error in debug and release builds, and how to move runAfterInteractions to requestIdleCallback.</span></li>
+<li><a href="/fix/rctcomponent-h-file-not-found-react-native-0-87">'RCTComponent.h' file not found</a><br><span class="meta">iOS build fails with 'RCTComponent.h' or 'RCTBridge.h' file not found after React Native 0.87: which libraries cause it, the fix and a workaround.</span></li>
 <li><a href="/fix/supabase-rls-disabled">Supabase: RLS disabled in public (0013_rls_disabled_in_public)</a><br><span class="meta">Why a Supabase table without row level security is readable by anyone who has your React Native or Expo app, and how to enable RLS with policies.</span></li>
 <li><a href="/fix/app-store-account-deletion-5-1-1-v">Guideline 5.1.1(v): the app supports account creation but does not include an option to initiate account deletion</a><br><span class="meta">Why Apple rejects React Native and Expo apps under guideline 5.1.1(v), what counts as account deletion, and what Google Play asks for as well.</span></li>
-<li><a href="/fix/app-store-sign-in-with-apple-4-8">Guideline 4.8 - Design - Login Services</a><br><span class="meta">Why an iOS app with Google or Facebook login is rejected under App Store guideline 4.8, the exceptions, and how to add Sign in with Apple in React Native and Expo.</span></li>
+<li><a href="/fix/app-store-sign-in-with-apple-4-8">Guideline 4.8 - Design - Login Services</a><br><span class="meta">Why iOS apps with Google or Facebook login are rejected under App Store guideline 4.8, exceptions, and how to add Sign in with Apple in React Native and Expo.</span></li>
 <li><a href="/fix/google-play-target-api-level">Your app currently targets API level 34 and must target at least API level 36</a><br><span class="meta">What Google Play's target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.</span></li>
 <li><a href="/fix/google-play-16-kb-page-size">Your app does not support 16 KB memory page sizes</a><br><span class="meta">What Google Play's 16 KB memory page size warning means for React Native and Expo apps, the 1 February 2027 deadline, and which version fixes it.</span></li>
-<li><a href="/fix/signed-in-debug-mode">You uploaded an APK or Android App Bundle that was signed in debug mode</a><br><span class="meta">Why Google Play refuses a React Native release build "signed in debug mode", and how to set up release signing without committing your passwords.</span></li></ul>
+<li><a href="/fix/signed-in-debug-mode">You uploaded an APK or Android App Bundle that was signed in debug mode</a><br><span class="meta">Why Google Play refuses a React Native release build "signed in debug mode", and how to set up release signing without committing your passwords.</span></li>
+<li><a href="/fix/uiscene-life-cycle-required-xcode-27">UIScene life cycle is required for apps built with this SDK</a><br><span class="meta">Why a React Native or Expo app stops at launch when built with Xcode 27 and the iOS 27 SDK, the April 2027 App Store deadline, and how to adopt UIScene.</span></li></ul>
 </main></body>
 </html>

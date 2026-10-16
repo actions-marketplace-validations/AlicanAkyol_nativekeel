@@ -32,6 +32,39 @@ export const PLAY_TARGET_SDK = {
 // React Native supports 16 KB pages from 0.77.
 export const PAGE_SIZE_16K = { since: '2025-11-01', blockedFrom: '2027-02-01', firstRnMinor: 77 };
 
+// App Store SDK requirement and the UIScene life cycle. Apple, 2026-09-09: "Starting April 2027,
+// apps ... uploaded to App Store Connect ... must be built with the iOS 27 & iPadOS 27 SDK or
+// later" (developer.apple.com/news/?id=k1mtkt1k; no day given, so the 1st is used). TN3187:
+// apps built with the SDK after iOS 26 that have not adopted the scene life cycle do not launch.
+// React Native: the 0.88 template is the first with SceneDelegate (react-native-community/
+// template 0.88-stable). Expo: SDK 57 opts in with expo >= 57.0.23, expo-build-properties
+// >= 57.0.20 and ios.enableSceneSupport; SDK 58 has it by default (expo/expo#46664). Checked 2026-10-09.
+export const IOS_SDK_27 = { from: '2027-04-01', announced: '2026-09-09', firstRnMinor: 88, expoOptInSdk: 57, expoDefaultSdk: 58 };
+
+// Libraries whose latest release sends `window` to the app delegate from Objective-C without a
+// respondsToSelector: check. The React Native 0.88 template's AppDelegate has no window (it moved
+// to SceneDelegate), so the call throws "-[AppDelegate window]: unrecognized selector". Found by
+// scanning each package's iOS sources (2026-10-10); reproduced on a 0.88.0-rc.4 template app with
+// react-native-blob-util (presentOptionsMenu) and fixed there with RCTPresentedViewController().
+// @react-native-firebase/messaging runs it at launch (application did-finish-launching observer).
+export const SCENE_WINDOW_LIBS = {
+  '@react-native-firebase/messaging': 'at launch',
+  'react-native-blob-util': 'when it presents the open-in / options menu',
+  'react-native-google-mobile-ads': 'when it shows banners, the consent form or the ad inspector',
+  'react-native-image-crop-picker': 'when it opens the picker',
+  'react-native-date-picker': 'when it opens the modal picker',
+  'react-native-exception-handler': 'when it shows the native error screen',
+  'rn-fetch-blob': 'when it presents the open-in menu',
+  'react-native-fetch-blob': 'when it presents the open-in menu',
+  'react-native-contacts': 'when it opens the contact form',
+  'react-native-print': 'when it presents the print dialog',
+  'react-native-ui-lib': 'in its keyboard input controller',
+  'react-native-youtube': 'when it plays a video full screen',
+  'react-native-safari-view': 'when it opens the Safari view',
+  '@remobile/react-native-toast': 'when it shows a toast',
+  'react-native-snackbar': 'when it shows a snackbar',
+};
+
 // Minimum OS versions of current React Native (since 0.76).
 // https://reactnative.dev/blog/2024/10/23/release-0.76-new-architecture
 export const PLATFORM_MINIMUMS = { androidMinSdk: 24, iosMin: 15.1 };
@@ -75,6 +108,28 @@ export const REPLACEMENTS = {
   'react-native-iphone-x-helper': ['react-native-safe-area-context'],
   'react-native-slider': ['@react-native-community/slider'],
   'react-native-datepicker': ['@react-native-community/datetimepicker'],
+};
+
+// What a user needs to know before acting on a dep-risk finding, when the registries cannot
+// say it. Shown after the finding's detail. Sourced and dated.
+export const PACKAGE_NOTES = {
+  // learn.microsoft.com App Center retirement notice; github.com/microsoft/react-native-code-push and
+  // microsoft/code-push-server both show archived (checked 2026-10-14).
+  'react-native-code-push': 'Its service, Visual Studio App Center, was retired on 31 March 2025, and Microsoft archived both this client and its standalone CodePush server on 20 May 2025: unless you run your own CodePush server, updates sent this way no longer reach users.',
+  // README and rntp.dev/pricing, checked 2026-10-09. v4 branch MusicModule.kt: 37 @ReactMethod
+  // functions are written `= scope.launch { }` and return a coroutine Job, which the interop
+  // layer rejects ("Detected unsupported return class: kotlinx.coroutines.Job"). expo-audio:
+  // lock screen controls and background playback via setActiveForLockScreen, but no
+  // next/previous track commands yet (expo/expo#43538). Kotlin 2.1, crash and the first-setupPlayer
+  // race reproduced on RN 0.81.4 and fixed in our PR #2685 (tested on an emulator, 2026-10-09).
+  'react-native-track-player':
+    'Version 5, the New Architecture rewrite, is a different package (@rntp/player) under a commercial license: free for personal and educational use, paid for commercial apps (rntp.dev/pricing). The free 4.x line (4.1.2) does not compile with Kotlin 2.1 (React Native 0.79+) and crashes at launch on Android with the New Architecture (its methods return a coroutine Job); the fixes are in github.com/doublesymmetry/react-native-track-player/pull/2685, which you can apply with patch-package until it is released. For simple playback, expo-audio has background playback and lock screen controls, but no next/previous track commands yet.',
+  // RNPushNotificationListenerService.onNewToken and RNPushNotificationActions (8.1.1) call
+  // getReactNativeHost() on the main thread without a guard. ReactApplication.reactNativeHost
+  // throws by default from React Native 0.82 (ReactApplication.kt), and the 0.82+ template's
+  // MainApplication no longer overrides it. Checked 2026-10-09.
+  'react-native-push-notification':
+    'It calls getReactNativeHost() when the FCM token refreshes (on every fresh install) and when a notification action is tapped. From React Native 0.82 that getter throws unless MainApplication still overrides reactNativeHost, which the 0.82+ template no longer does, so the app crashes there. Replace it before that upgrade, or keep reactNativeHost in MainApplication.',
 };
 
 // Packages that moved to a new name with the same API: swap the package, update the imports.

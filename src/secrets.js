@@ -1,6 +1,6 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { gitLsFiles } from './git.js';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'Pods', 'build', '.gradle', 'DerivedData', '.expo', 'dist', 'coverage']);
 const EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.json', '.plist', '.xml', '.gradle', '.properties', '.env', '.m', '.mm', '.swift', '.kt', '.java']);
@@ -39,7 +39,10 @@ const RULES = [
     re: /\b(?<v>eyJ[A-Za-z0-9_-]{10,}\.(?<payload>eyJ[A-Za-z0-9_-]{10,})\.[A-Za-z0-9_-]{20,})\b/g,
     validate: (m) => {
       try {
-        return JSON.parse(Buffer.from(m.groups.payload, 'base64url').toString('utf8')).role === 'service_role';
+        // `supabase start` gives every developer the same demo keys (iss "supabase-demo"); they only
+        // open a local database on 127.0.0.1.
+        const claims = JSON.parse(Buffer.from(m.groups.payload, 'base64url').toString('utf8'));
+        return claims.role === 'service_role' && claims.iss !== 'supabase-demo';
       } catch {
         return false;
       }
@@ -51,7 +54,7 @@ const RULES = [
 const PLACEHOLDER = /example|test|dummy|fake|sample|placeholder|xxxx|changeme|redacted|your[_-]?(?:api[_-]?)?(?:key|token|secret)/i;
 
 // Test code is never part of the app bundle.
-const TEST_PATH = /(^|\/)(__tests__|__mocks__|__fixtures__|test|tests|e2e|fixtures)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)tests?\.[cm]?[jt]sx?$|[a-z]Test\.[cm]?[jt]sx?$/;
+export const TEST_PATH = /(^|\/)(__tests__|__mocks__|__fixtures__|test|tests|e2e|fixtures)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)tests?\.[cm]?[jt]sx?$|[a-z]Test\.[cm]?[jt]sx?$/;
 
 const JS_FILE = /\.[cm]?[jt]sx?$/;
 
@@ -98,8 +101,8 @@ function* walk(dir) {
 }
 
 function gitTrackedFiles(root) {
-  const res = spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  return res.status === 0 ? new Set(res.stdout.split('\n')) : null;
+  const files = gitLsFiles(root);
+  return files ? new Set(files) : null;
 }
 
 export function scanSecrets(root) {
@@ -107,6 +110,15 @@ export function scanSecrets(root) {
   const tracked = gitTrackedFiles(root);
   const files = [...walk(root)];
   let jsonImports = null; // computed only if a JSON file holds a secret
+  // A .env file reaches the bundle only through EXPO_PUBLIC_ names (Expo) or a library that
+  // inlines every variable (react-native-config, react-native-dotenv). Other names stay with
+  // server code (Expo API routes, functions) and the build.
+  let pkg = {};
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  } catch {}
+  const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  const inlinesAllEnv = ['react-native-config', 'react-native-dotenv', 'babel-plugin-transform-inline-environment-variables'].some((n) => allDeps[n]);
   for (const file of files) {
     let text;
     try {
@@ -131,13 +143,15 @@ export function scanSecrets(root) {
           jsonImports = jsonImports || importedJsonNames(files);
           unreferencedJson = !jsonImports.has(path.basename(file));
         }
+        const envFile = /^\.env(\.|$)/.test(path.basename(file));
+        const envShipped = !envFile || inlinesAllEnv || /^\s*(?:export\s+)?EXPO_PUBLIC_/.test(lines[line - 1] || '');
         findings.push({
           rule: rule.id,
           label: rule.label,
           file: rel,
           line,
           preview: value ? mask(value) : null,
-          inAppBundle: !SERVER_DIRS.has(posix.split('/')[0]) && !TEST_PATH.test(posix) && !inComment && !unreferencedJson,
+          inAppBundle: !SERVER_DIRS.has(posix.split('/')[0]) && !TEST_PATH.test(posix) && !inComment && !unreferencedJson && envShipped,
           inComment,
           committed: tracked ? tracked.has(posix) : null,
         });

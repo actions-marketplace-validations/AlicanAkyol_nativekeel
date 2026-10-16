@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Google Play: "must target at least API level" in a React Native app</title>
+<title>Google Play "must target at least API level": React Native</title>
 <meta name="description" content="What Google Play's target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -12,10 +12,11 @@
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="NativeKeel">
 <meta property="og:url" content="https://nativekeel.com/fix/google-play-target-api-level">
-<meta property="og:title" content="Google Play: "must target at least API level" in a React Native app">
+<meta property="og:title" content="Google Play &quot;must target at least API level&quot;: React Native">
 <meta property="og:description" content="What Google Play's target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.">
 <meta property="og:image" content="https://nativekeel.com/og.png">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:description" content="What Google Play's target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.">
 <meta name="twitter:image" content="https://nativekeel.com/og.png">
 <style>:root{--bg:#fbfaf7;--text:#15171b;--muted:#5d6470;--accent:#0b5d55;--line:#e3e1db;--card:#ffffff;--code:#f1efea}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1013;--text:#e9ebef;--muted:#9aa2ad;--accent:#3cc4b4;--line:#262a31;--card:#15181d;--code:#1b1f25}}
@@ -26,21 +27,21 @@ h1{font-size:28px;line-height:1.25;margin:0 0 6px}h2{font-size:18px;margin:28px 
 code{font:14px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:1px 5px;border-radius:5px}
 pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto}pre code{background:none;padding:0;white-space:pre-wrap}
 .cta{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:28px 0}.cta code{font-size:15px}
-.meta{font-size:14px;color:var(--muted)}ul.list li{margin:8px 0}</style>
+.meta{font-size:14px;color:var(--muted)}ul.list li{margin:8px 0}table{border-collapse:collapse;width:100%;font-size:15px;margin:12px 0;display:block;overflow-x:auto}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}th{font-weight:600}</style>
 </head>
 <body><main>
 <p class="meta"><a href="/">NativeKeel</a> · <a href="/fix/">React Native fixes</a></p>
 <h1>Your app currently targets API level 34 and must target at least API level 36</h1>
-<p class="meta">Updated 2026-10-08</p>
+<p class="meta">Updated 2026-10-10</p>
 <p>Play Console shows:</p>
 <pre><code>Your app currently targets API level 34 and must target at least API level 36 to ensure that it is built on the latest APIs optimized for security and performance.</code></pre>
 <p><strong>The rule in 2026.</strong> Since 31 August 2026, new apps and app updates must target Android 16 (API level 36). Existing apps must target at least Android 15 (API level 35) to stay available to new users on newer Android versions. Apps that requested an extension have until 1 November 2026.</p>
 <p><strong>How to fix it in React Native.</strong> Set <code>targetSdkVersion = 36</code> and <code>compileSdkVersion = 36</code> in <code>android/build.gradle</code> (Expo: use the SDK that targets it, or <code>expo-build-properties</code>). Then check what changes with each API level you skip:</p>
 <ul><li>Target 31: components with an intent filter need <code>android:exported</code>, or the build fails (<a href="/fix/android-exported">details</a>).</li><li>Target 34: foreground services must declare their type, or the app crashes when one starts (<a href="/fix/missing-foreground-service-type">details</a>).</li><li>Target 35: the app is drawn edge-to-edge on Android 15, so screens using React Native's own <code>SafeAreaView</code> slide under the status bar (<a href="/fix/imagebackground-safeareaview-deprecated">details</a>).</li></ul>
 <p><strong>Check your app first.</strong> <code>npx nativekeel</code> reports the target SDK problem and each of these follow-on issues, and its upgrade plan orders them.</p>
-<div class="cta"><strong>Check your whole app in one command:</strong> <code>npx nativekeel</code><br><span class="meta">Free, runs locally (your code is not uploaded), no account. It reports this and 80 other upgrade, store, crash and security problems.</span></div>
+<div class="cta"><strong>Check your whole app in one command:</strong> <code>npx nativekeel</code><br><span class="meta">Free, runs locally (your code is not uploaded), no account. It reports this along with the other upgrade, store, crash and security problems it checks for.</span></div>
 <h2>Sources</h2>
 <ul><li><a href="https://support.google.com/googleplay/android-developer/answer/11926878">Google Play target API level requirements</a></li></ul>
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Google Play: \"must target at least API level\" in a React Native app","description":"What Google Play's target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.","dateModified":"2026-10-08","author":{"@type":"Organization","name":"NativeKeel","url":"https://nativekeel.com"},"mainEntityOfPage":"https://nativekeel.com/fix/google-play-target-api-level"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Google Play \"must target at least API level\": React Native","description":"What Google Play's target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.","dateModified":"2026-10-10","author":{"@type":"Organization","name":"NativeKeel","url":"https://nativekeel.com"},"mainEntityOfPage":"https://nativekeel.com/fix/google-play-target-api-level"}</script>
 </main></body>
 </html>

@@ -28,6 +28,7 @@ function bareApp() {
     'src/App.js': "import FastImage from 'react-native-fast-image';\nimport lib from 'some-js-lib';\n",
     'src/aws.js': `AWS.config.update({ accessKeyId: '${FAKE_AWS_ID}', secretAccessKey: '${FAKE_AWS_SECRET}' });\n`,
     'functions/admin.json': `{"private_key": "-----BEGIN PRIVATE KEY-----${FAKE_PEM_BODY.replace(/\n/g, '\\n')}-----END PRIVATE KEY-----"}`,
+    'src/__tests__/crypto.test.ts': `const privateKey = \`-----BEGIN RSA PRIVATE KEY-----${FAKE_PEM_BODY}-----END RSA PRIVATE KEY-----\``,
   });
 }
 
@@ -57,6 +58,8 @@ test('bare app: version, architecture, store, dependency and secret findings', a
 
   const server = result.findings.find((f) => f.id === 'secret:private-key:functions/admin.json');
   assert.equal(server.severity, 'high', 'server-side secrets are not reported as shipped in the app');
+  const testKey = result.findings.find((f) => f.id === 'secret:private-key:src/__tests__/crypto.test.ts');
+  assert.equal(testKey.severity, 'low', 'a key pair made for a test unlocks nothing');
 
   assert.equal(result.findings[0].severity, 'critical', 'findings are sorted by severity');
   assert.equal(result.latest.reactNative, '0.87.1');
@@ -329,6 +332,23 @@ test('Expo: a library version Expo pins for the SDK is not a compat problem', as
   assert.equal(unknown.severity, 'medium', 'without the pin list, Expo projects get a softer finding');
 });
 
+test('a library built from another folder by react-native.config.js is not checked against the legacy architecture', async () => {
+  const app = (config) =>
+    makeProject({
+      'package.json': { name: 'w', dependencies: { 'react-native': '0.79.2', 'react-native-reanimated': '4.1.3', 'react-native-worklets': '0.6.1' } },
+      'node_modules/react-native/package.json': { version: '0.79.2' },
+      'node_modules/react-native-reanimated/package.json': { version: '4.1.3' },
+      'node_modules/react-native-reanimated/android/build.gradle': '',
+      'android/gradle.properties': 'newArchEnabled=false\n',
+      'src/App.js': "import Animated from 'react-native-reanimated';\n",
+      ...(config ? { 'react-native.config.js': config } : {}),
+    });
+  const compat = async (root) => (await analyze(loadProject(root), { get: registry, now: NOW })).findings.find((f) => f.id === 'compat:react-native-reanimated');
+  assert.match((await compat(app(null))).title, /legacy Architecture/);
+  const shim = "module.exports = { dependencies: { 'react-native-reanimated': { platforms: { android: { sourceDir: '../node_modules/r3-hack/node_modules/react-native-reanimated/android' } } } } };";
+  assert.equal(await compat(app(shim)), undefined, 'Edge links Reanimated 3 on Android through a shim');
+});
+
 test('Expo range check', async () => {
   const { satisfiesExpoRange } = await import('../src/analyze.js');
   assert.equal(satisfiesExpoRange('2.9.1', '~2.9.1'), true);
@@ -495,4 +515,34 @@ test('packages from the same monorepo (workspace:, link:, file:) are not checked
   const ids = (await analyze(loadProject(root), { get, now: NOW })).findings.map((f) => f.id);
   assert.ok(!ids.some((i) => i.includes('@acme/env-link')), 'a workspace package is developed in the repo');
   assert.ok(ids.includes('dep-risk:old-lib'));
+});
+
+test('a package note tells what the registries cannot: Track Player 5 is commercially licensed', async () => {
+  const reg = fakeRegistry({
+    directory: { 'react-native-track-player': { ios: true, android: true, newArchitecture: false } },
+    latest: { 'react-native-track-player': '4.1.2' },
+  });
+  const root = makeProject({
+    'package.json': { name: 'p', dependencies: { 'react-native': '0.80.0', 'react-native-track-player': '4.1.2' } },
+    'node_modules/react-native/package.json': { version: '0.80.0' },
+    'node_modules/react-native-track-player/package.json': { version: '4.1.2' },
+    'node_modules/react-native-track-player/android/build.gradle': '',
+    'src/App.js': "import TrackPlayer from 'react-native-track-player';\n",
+  });
+  const f = (await analyze(loadProject(root), { get: reg, now: NOW })).findings.find((x) => x.id === 'dep-risk:react-native-track-player');
+  assert.match(f.detail, /\(@rntp\/player\) under a commercial license/);
+  assert.match(f.detail, /no next\/previous track commands/);
+  assert.match(f.detail, /pull\/2685/);
+});
+
+test('store review rules run as part of analyze (lost in 0.1.42, restored in 0.1.52)', async () => {
+  const root = makeProject({
+    'package.json': { name: 's', dependencies: { 'react-native': '0.85.0', '@react-native-firebase/auth': '23.0.0', '@react-native-google-signin/google-signin': '15.0.0' } },
+    'node_modules/react-native/package.json': { version: '0.85.0' },
+    'src/App.js': "import auth from '@react-native-firebase/auth';\nauth().createUserWithEmailAndPassword(email, password);\nGoogleSignin.signIn();\n",
+    'ios/Podfile': '',
+  });
+  const ids = (await analyze(loadProject(root), { get: registry, now: NOW })).findings.map((f) => f.id);
+  assert.ok(ids.includes('store-account-deletion'));
+  assert.ok(ids.includes('store-sign-in-with-apple'));
 });

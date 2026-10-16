@@ -1,5 +1,6 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
 import path from 'node:path';
+import { validateManifest, validPackageName } from './package-name.js';
 
 const readText = (file) => {
   try {
@@ -29,6 +30,7 @@ export function cleanVersion(v) {
 
 // Monorepos hoist packages, so look in every node_modules from the app up to the filesystem root.
 export function findPackageDir(root, name) {
+  if (!validPackageName(name)) return null;
   let dir = root;
   while (true) {
     const candidate = path.join(dir, 'node_modules', name);
@@ -126,8 +128,9 @@ export function versionFromSpec(name, spec) {
 }
 
 export function loadProject(root) {
-  const pkg = readJson(path.join(root, 'package.json'));
-  if (!pkg) throw new Error(`No package.json found in ${root}`);
+  const raw = readJson(path.join(root, 'package.json'));
+  if (!raw) throw new Error(`No package.json found in ${root}`);
+  const { pkg, skipped: skippedDeps } = validateManifest(raw);
   const usesCatalog = JSON.stringify([pkg.dependencies, pkg.devDependencies]).includes('"catalog:');
   const catalogs = usesCatalog ? readCatalogs(root) : null;
   const deps = resolveCatalogRefs({ ...(pkg.dependencies || {}) }, catalogs);
@@ -155,10 +158,13 @@ export function loadProject(root) {
   return {
     root,
     name: pkg.name,
+    skippedDeps,
     isLibrary,
     deps,
     devDeps,
     rnVersion: cleanVersion(installedVersion(root, 'react-native') || versionFromSpec('react-native', declared('react-native')) || ''),
+    // "rc.4" for 0.88.0-rc.4: shown next to the version, never used in comparisons.
+    rnPrerelease: (String(installedVersion(root, 'react-native') || versionFromSpec('react-native', declared('react-native')) || '').match(/^[^-]*\d-((?:rc|alpha|beta|nightly|canary)[\w.-]*)/) || [])[1] || null,
     expoVersion: declared('expo') ? cleanVersion(installedVersion(root, 'expo') || declared('expo')) : null,
     // Expo "managed" apps generate android/ and ios/ at build time (Continuous Native Generation).
     managed: !!declared('expo') && !hasAndroid && !hasIos,

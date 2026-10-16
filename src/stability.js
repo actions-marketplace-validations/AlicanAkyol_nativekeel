@@ -1,7 +1,9 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
+import { upcomingFinding } from './upcoming.js';
 import path from 'node:path';
 import { cleanVersion, findPackageDir, installedVersion, versionFromSpec } from './project.js';
 import { filesImportingWith } from './usage.js';
+import { lockedCopies } from './lockfile.js';
 
 // Static checks for setups that build fine and then crash at runtime. Each one is a known,
 // documented failure, not a style preference.
@@ -118,12 +120,19 @@ export function stabilityChecks(project) {
     const versions = Object.fromEntries(nav.map((n) => [n, versionOf(n)]).filter(([, v]) => v));
     const majors = new Set(Object.values(versions).map(majorOf));
     if (majors.size > 1) {
+      // The crash comes from two copies of the core (each navigator then has its own
+      // navigation context). With one copy, a navigator from the other major usually still
+      // runs: Uniswap ships bottom-tabs 6 on React Navigation 7. That is unsupported, not a crash.
+      const split = ['@react-navigation/native', '@react-navigation/core'].filter((n) => new Set((lockedCopies(project.root, n) || []).map(majorOf)).size > 1);
+      const list = Object.entries(versions).map(([n, v]) => `${n} ${v}`).join(', ');
       add({
         id: 'crash-navigation-versions',
-        severity: 'high',
+        severity: split.length ? 'high' : 'medium',
         area: 'crash',
         title: 'React Navigation packages are on different major versions',
-        detail: `${Object.entries(versions).map(([n, v]) => `${n} ${v}`).join(', ')}. Navigators from one major do not work with the core of another; this usually crashes on the first navigation ("Couldn't find a navigation context" or undefined functions).`,
+        detail: split.length
+          ? `${list}. The lockfile installs two majors of ${split.join(' and ')}, so navigators from one major run against a different core than the app container: this crashes on the first navigation ("Couldn't find a navigation context" or undefined functions).`
+          : `${list}. React Navigation supports only one major across its packages; a navigator from another major runs against a core it was not built for, so options, types and behaviours can differ silently, and it gets no fixes for this setup. It is not a crash while there is one copy of @react-navigation/native and core; it becomes one if a second copy gets installed.`,
         fix: { kind: 'crash', step: 'Move every `@react-navigation/*` package to the same major version, following its migration guide.' },
       });
     }
@@ -165,7 +174,29 @@ export function stabilityChecks(project) {
 
   for (const f of iosUsageDescriptions(project)) add(f);
   for (const f of removedCoreImports(project)) add(f);
+  if (!project.isLibrary) for (const f of upcomingFinding(project)) add(f);
   if (!project.isLibrary) for (const f of releaseDevServer(project)) add(f);
+  // OTA updates: expo-updates only sends an update to builds with the same runtime version.
+  // With a hand-written string, or the appVersion/nativeVersion policies, keeping that value in
+  // step with native changes is manual; the fingerprint policy derives it from the native
+  // project (docs.expo.dev/eas-update/runtime-versions). A choice, so a note, not a warning.
+  if (deps['expo-updates']) {
+    const config = ['app.json', 'app.config.json', 'app.config.js', 'app.config.ts'].map((f) => ({ f, t: readText(path.join(root, f)) })).find((c) => c.t && /runtimeVersion/.test(c.t));
+    const m = config && config.t.match(/runtimeVersion["']?\s*:\s*(\{[^}]*\}|"[^"]*"|'[^']*')/);
+    const policy = m && (m[1].startsWith('{') ? (m[1].match(/policy["']?\s*:\s*["'](\w+)/) || [])[1] : 'custom');
+    if (policy && ['custom', 'appVersion', 'nativeVersion'].includes(policy)) {
+      const how = policy === 'custom' ? 'a hand-written runtimeVersion string' : `the ${policy} runtime version policy`;
+      add({
+        id: 'ota-runtime-version-manual',
+        severity: 'info',
+        area: 'crash',
+        title: `OTA updates rely on ${how} (${config.f})`,
+        detail: `expo-updates sends an update only to builds with the same runtime version. With ${how}, that value changes only when you change ${policy === 'custom' ? 'it' : policy === 'appVersion' ? 'the app version' : 'the native build version'}, so an update made after a native change (a new native module, an upgraded library, a config plugin) can reach builds without that native code. Expo's documentation calls this a runtime version mismatch; expo-updates may roll back, or the app may fail at start. The fingerprint policy changes the runtime version whenever the native project changes, at the cost of more builds.`,
+        fix: { kind: 'crash', step: `Bump the runtime version with every native change, or set \`"runtimeVersion": { "policy": "fingerprint" }\` in ${config.f}. Test each update on a preview channel and roll it out gradually.` },
+      });
+    }
+  }
+
   return findings;
 }
 
@@ -241,8 +272,25 @@ export function iosUsageDescriptions(project) {
     const inExpo = keys.some((k) => expoConfig.includes(k)) || used.some((p) => expoConfig.includes(`"${p}"`) || expoConfig.includes(`'${p}'`));
     if (!inPlist && !inExpo) missing.push({ ...u, used });
   }
-  if (!missing.length) return [];
+  // expo-local-authentication checks for the Face ID key itself (LocalAuthenticationModule.swift):
+  // biometrics-only requests resolve with missing_usage_description, the default falls back to
+  // the passcode. Face ID silently never works; it does not crash.
+  const out = [];
+  const faceIdx = missing.findIndex((m) => m.key === 'NSFaceIDUsageDescription' && m.used.every((p) => p === 'expo-local-authentication'));
+  if (faceIdx >= 0) {
+    missing.splice(faceIdx, 1);
+    out.push({
+      id: 'ios-faceid-description',
+      severity: 'medium',
+      area: 'store',
+      title: 'Face ID never shows: Info.plist has no NSFaceIDUsageDescription',
+      detail: 'expo-local-authentication sees the missing key and does not ask for Face ID: biometrics-only prompts fail with missing_usage_description, others go straight to the device passcode. Add NSFaceIDUsageDescription with a sentence that says why the app uses Face ID.',
+      fix: { kind: 'crash', step: 'Add `NSFaceIDUsageDescription` to the app\'s Info.plist with a user-facing reason.' },
+    });
+  }
+  if (!missing.length) return out;
   return [
+    ...out,
     {
       id: 'crash-ios-usage-description',
       severity: 'high',
@@ -281,7 +329,10 @@ const REMOVED_FROM_CORE = {
   ImagePickerIOS: 'react-native-image-picker',
   ProgressViewIOS: '@react-native-community/progress-view',
   ART: 'react-native-svg',
+  InteractionManager: 'requestIdleCallback (a global, no import)',
 };
+// Removed later than the rest (0.72/0.74); before that version the upcoming-changes check covers them.
+const REMOVED_IN = { InteractionManager: 87 };
 const REMOVED_PROP_TYPES = ['ViewPropTypes', 'ColorPropType', 'EdgeInsetsPropType', 'PointPropType'];
 // Deprecated in core and announced for removal (RN index.js warnOnce, checked 0.78-0.87).
 // They still work; moving now avoids a crash when they are removed.
@@ -314,6 +365,7 @@ export function removedCoreImports(project) {
     }
   };
   walk(root);
+  const minor = project.rnVersion ? Number(project.rnVersion.split('.')[1]) : null;
   for (const file of files) {
     const text = readText(file) || '';
     if (!text.includes("'react-native'") && !text.includes('"react-native"')) continue;
@@ -325,6 +377,7 @@ export function removedCoreImports(project) {
       for (const raw of b.names.split(',')) {
         const name = raw.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim();
         const at = () => `${path.relative(root, file)}:${text.slice(0, b.index).split('\n').length}`;
+        if (REMOVED_IN[name] && !(minor !== null && minor >= REMOVED_IN[name])) continue;
         if ((REMOVED_FROM_CORE[name] || REMOVED_PROP_TYPES.includes(name)) && !used.has(name)) used.set(name, at());
         // Referenced anywhere besides the import itself? An import alone is harmless (undefined).
         if (REMOVED_FROM_CORE[name] || REMOVED_PROP_TYPES.includes(name)) {
@@ -335,7 +388,6 @@ export function removedCoreImports(project) {
       }
     }
   }
-  const minor = project.rnVersion ? Number(project.rnVersion.split('.')[1]) : null;
   const findings = [];
   if (deprecated.size) {
     const names = [...deprecated.keys()];
@@ -355,9 +407,10 @@ export function removedCoreImports(project) {
     });
   }
   if (!used.size) return findings;
-  const removedNow = (n) => (REMOVED_PROP_TYPES.includes(n) ? minor >= 74 : minor >= 72);
+  const removedNow = (n) => (REMOVED_IN[n] ? minor >= REMOVED_IN[n] : REMOVED_PROP_TYPES.includes(n) ? minor >= 74 : minor >= 72);
   const crashesNow = [...used.keys()].some((n) => removedNow(n) && referenced.has(n));
   const importOnly = [...used.keys()].every((n) => !referenced.has(n));
+  const moved = [...used.keys()].filter((n) => n !== 'InteractionManager');
   const list = [...used].map(([n, at]) => `${n} (${at}${referenced.has(n) ? '' : ', imported but not used'}) → ${REMOVED_FROM_CORE[n] || 'deprecated-react-native-prop-types'}`);
   return [
     ...findings,
@@ -369,7 +422,7 @@ export function removedCoreImports(project) {
         ? `${used.size} unused import${used.size === 1 ? '' : 's'} of APIs removed from React Native core`
         : `${used.size} import${used.size === 1 ? '' : 's'} of APIs removed from React Native core${crashesNow ? '' : ' (they break when you upgrade)'}`,
       detail: `${list.slice(0, 6).join('; ')}${list.length > 6 ? '; …' : ''}. On current React Native these imports are undefined in release builds (development builds throw "has been removed from react-native core"), so ${importOnly ? 'an import that is never used is harmless: delete it' : 'the code that calls them fails at that point. Install the replacement and change the import'}.`,
-      fix: { kind: 'crash', step: `Move ${[...used.keys()].map((n) => `\`${n}\``).join(', ')} off 'react-native' to their community packages (${[...new Set([...used.keys()].map((n) => REMOVED_FROM_CORE[n] || 'deprecated-react-native-prop-types'))].slice(0, 4).join(', ')}).` },
+      fix: { kind: 'crash', step: [moved.length ? `Move ${moved.map((n) => `\`${n}\``).join(', ')} off 'react-native' to their community packages (${[...new Set(moved.map((n) => REMOVED_FROM_CORE[n] || 'deprecated-react-native-prop-types'))].slice(0, 4).join(', ')}).` : '', used.has('InteractionManager') ? 'Replace `InteractionManager.runAfterInteractions(fn)` with `requestIdleCallback(fn)`.' : ''].filter(Boolean).join(' ') },
     },
   ];
 }

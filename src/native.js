@@ -1,9 +1,12 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { validPackageName } from './package-name.js';
+import { gitLsFiles } from './git.js';
 import { checkArchive, findBuiltArtifact } from './elf-align.js';
 import { PAGE_SIZE_16K, PLATFORM_MINIMUMS } from './rules.js';
 import { installedVersion as installedVersionOf } from './project.js';
+import { SITE_URL } from './config.js';
+import { unprefixedReactImports } from './react-headers.js';
 
 // Checks on native project files: store requirements and security settings that live
 // outside package.json. Every check returns findings in the same shape as analyze.js.
@@ -36,10 +39,8 @@ function findFiles(dir, test, depth = 0, out = []) {
 const minorOf = (v) => (v ? Number(v.split('.')[1]) : null);
 
 function gitTracked(root) {
-  const res = spawnSync('git', ['ls-files'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (res.status !== 0) return null;
   // ls-files paths are relative to the current directory, which is the app root here.
-  return res.stdout.split('\n').filter(Boolean);
+  return gitLsFiles(root);
 }
 
 // Debug-only native libraries that never ship in a release build.
@@ -125,6 +126,30 @@ export function nativeChecks(project, { rnLatest = null, now = new Date() } = {}
       });
     }
     const artifact = findBuiltArtifact(root);
+    // Prebuilt binaries known to be 4 KB aligned that a package adds only behind an option, so
+    // they never show up until someone builds with it (checked with llvm-readelf, 2026-10-09):
+    // expo-sqlite's bundled sqlite-vec (android/vec, expo/expo#51329; upstream asg017/sqlite-vec#254)
+    // and its libSQL binaries (android/libsql, removed after SDK 57).
+    if (!artifact && (project.deps['expo-sqlite'] || (project.devDeps && project.devDeps['expo-sqlite']))) {
+      const config = [
+        ['app.json', 'app.config.js', 'app.config.ts'].map((f) => read(path.join(root, f)) || '').join('\n'),
+        read(path.join(root, 'android', 'gradle.properties')) || '',
+      ].join('\n');
+      const options = [
+        /withSQLiteVecExtension["']?\s*[:=]\s*["']?true/.test(config) && 'withSQLiteVecExtension (sqlite-vec, vec.so)',
+        /useLibSQL["']?\s*[:=]\s*["']?true/.test(config) && 'useLibSQL (libsql_experimental.so)',
+      ].filter(Boolean);
+      if (options.length) {
+        add({
+          id: 'android-16kb-expo-sqlite',
+          severity: blocked16k ? 'critical' : 'high',
+          area: 'store',
+          title: `expo-sqlite's ${options.length === 1 ? 'optional native library is' : 'optional native libraries are'} not 16 KB aligned (${options.map((o) => o.split(' ')[0]).join(', ')})`,
+          detail: `${options.join(' and ')} ${options.length === 1 ? 'adds a prebuilt library' : 'add prebuilt libraries'} to the APK whose 64-bit builds are 4 KB aligned in expo-sqlite 57 and on Expo's main branch (expo/expo#51329; the upstream sqlite-vec fix is asg017/sqlite-vec#254). ${policy16k} Until a fixed release, keep the option off for Android, or ship your own 16 KB-aligned build of the extension. Build a release APK and run NativeKeel again to confirm.`,
+          fix: { kind: 'align-16kb', libs: options, blocked: blocked16k, blockedFrom: PAGE_SIZE_16K.blockedFrom },
+        });
+      }
+    }
     if (artifact) {
       let result = null;
       try {
@@ -179,8 +204,28 @@ export function nativeChecks(project, { rnLatest = null, now = new Date() } = {}
         severity: archOn ? 'critical' : 'high',
         area: 'native',
         title: `iOS AppDelegate is missing RCTAppDependencyProvider (${path.relative(root, delegates[0])})`,
-        detail: `Required since React Native 0.77. Without it, library Fabric components fall back to the legacy interop layer and send RCTEventEmitter events, which are not registered with the New Architecture: "RCTEventEmitter.receiveEvent() ... has not been registered as callable", logged in Debug, a launch crash in Release.${archOn ? '' : ' It will surface as soon as the New Architecture is turned on.'} Add the import and \`self.dependencyProvider = [RCTAppDependencyProvider new];\` before calling super.`,
+        detail: `Required since React Native 0.77. Without it, library Fabric components fall back to the legacy interop layer and send RCTEventEmitter events, which are not registered with the New Architecture: "RCTEventEmitter.receiveEvent() ... has not been registered as callable", logged in Debug, a launch crash in Release.${archOn ? '' : ' It will surface as soon as the New Architecture is turned on.'} Add the import and \`self.dependencyProvider = [RCTAppDependencyProvider new];\` before calling super (Swift and per-version snippets: ${SITE_URL}/fix/rcteventemitter-receiveevent-not-registered).`,
         fix: { kind: 'app-dependency-provider', file: path.relative(root, delegates[0]) },
+      });
+    }
+  }
+
+  // React Native 0.87+: React headers imported without "React/" are not found and the iOS build
+  // stops. Libraries are the usual source; before 0.87 the upcoming-changes check reports them.
+  if ((hasIos || project.managed) && rn !== null && rn >= 87) {
+    const { libraries, app } = unprefixedReactImports(project);
+    const where = [
+      ...libraries.map((l) => `${l.name}${l.version ? ` ${l.version}` : ''} (${l.hits[0].file}:${l.hits[0].line} ${l.hits[0].header})`),
+      ...app.slice(0, 3).map((h) => `${h.file}:${h.line} ${h.header}`),
+    ];
+    if (where.length) {
+      add({
+        id: 'ios-unprefixed-react-imports',
+        severity: 'critical',
+        area: 'native',
+        title: `iOS build fails: ${libraries.length ? `${libraries.length === 1 ? 'a library imports' : `${libraries.length} libraries import`}` : 'your code imports'} React headers without "React/"`,
+        detail: `${where.join('; ')}. Since React Native 0.87 these headers come from XCFrameworks and resolve only as <React/...>, so Xcode stops with "'RCT….h' file not found". ${libraries.length ? 'Update the library if a release fixes it; otherwise patch the import (patch-package) until it does. ' : ''}Write the import as #import <React/RCTBridge.h> (an import inside #if __has_include(...) is fine).${[...libraries.flatMap((l) => l.hits), ...app].every((h) => h.header.startsWith('"')) ? ' Until then, building React Native from source (RCT_USE_PREBUILT_RNCORE=0 pod install) still resolves the quoted form; it makes clean builds slower.' : ''} Details and library status: ${SITE_URL}/fix/rctcomponent-h-file-not-found-react-native-0-87`,
+        fix: { kind: 'known-issue', severity: 'critical', title: 'React headers imported without "React/" stop the iOS build', detail: `Change them to the <React/...> form${libraries.length ? ` in ${libraries.map((l) => l.name).join(', ')} (update the library, or patch-package until a release fixes it)` : ''}${app.length ? `${libraries.length ? ' and' : ''} in ${[...new Set(app.map((h) => h.file))].slice(0, 3).join(', ')}` : ''}.` },
       });
     }
   }
@@ -254,6 +299,7 @@ export function nativeChecks(project, { rnLatest = null, now = new Date() } = {}
     const m = f.match(/^(.+?)\+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+\d+(?:\+[^/]*)?)?(?:\.dev)?\.patch$/);
     if (!m) continue;
     const pkg = m[1].replace(/\+/g, '/');
+    if (!validPackageName(pkg)) continue;
     const version = m[2];
     patched.push({ file: f, pkg, version });
     const text = read(path.join(patchDir, f)) || '';
@@ -461,7 +507,29 @@ export function nativeChecks(project, { rnLatest = null, now = new Date() } = {}
         return false;
       }
     };
-    const signing = tracked.filter((f) => /\.(jks|keystore)$/i.test(f) && !/(?:^|[^a-z])(?:debug|fake|dummy|test|sample|example)/i.test(path.basename(f)) && !/(?:^|\/)(?:__tests__|tests?|e2e|fixtures?)\//.test(f) && nonEmpty(f));
+    // A local fallback: `if (hasProperty('storeFile')) { …real key from properties… } else { file("x.keystore"),
+    // storePassword "password" }`. Release builds sign with the properties; the committed keystore
+    // with a throwaway password only makes local release builds possible (Edge does this).
+    const fallbackBlocks = [];
+    for (const f of ['android/app/build.gradle', 'android/app/build.gradle.kts'].filter((x) => tracked.includes(x))) {
+      const text = read(path.join(root, f)) || '';
+      for (const m of text.matchAll(/if\s*\([^\n]*(?:hasProperty|findProperty|getenv)\s*\([^\n]*\)\s*\{/g)) {
+        let depth = 1;
+        let i = m.index + m[0].length;
+        while (i < text.length && depth) depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0, i++;
+        const els = text.slice(i).match(/^\s*else\s*\{/);
+        if (!els) continue;
+        const start = i + els[0].length;
+        depth = 1;
+        let j = start;
+        while (j < text.length && depth) depth += text[j] === '{' ? 1 : text[j] === '}' ? -1 : 0, j++;
+        const body = text.slice(start, j - 1);
+        const passwords = [...body.matchAll(/(?:storePassword|keyPassword)\s*=?\s*["']([^"'\n]+)["']/g)].map((x) => x[1]);
+        if (passwords.length && passwords.every((v) => /^(password|android|123456|changeit|keystore|secret)$/i.test(v))) fallbackBlocks.push({ file: f, start, end: j - 1, body });
+      }
+    }
+    const fallbackKeystore = (f) => fallbackBlocks.some((b) => new RegExp(`file\\s*\\(\\s*["'][^"']*${path.basename(f).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`).test(b.body));
+    const signing = tracked.filter((f) => /\.(jks|keystore)$/i.test(f) && !/(?:^|[^a-z])(?:debug|fake|dummy|test|sample|example)/i.test(path.basename(f)) && !/(?:^|\/)(?:__tests__|tests?|e2e|fixtures?)\//.test(f) && nonEmpty(f) && !fallbackKeystore(f));
     for (const f of signing) {
       add({
         id: `signing-keystore:${f}`,
@@ -510,6 +578,7 @@ export function nativeChecks(project, { rnLatest = null, now = new Date() } = {}
         // A password for a test/sample keystore (storeFile file('test.keystore') just above it) is
         // a local fallback, not the release key.
         ...[...text.matchAll(/(?<![\w'"[])(storePassword|keyPassword)\s*=?\s*["']([^"'\n]+)["']/g)]
+          .filter((m) => !fallbackBlocks.some((b) => b.file === f && m.index >= b.start && m.index < b.end))
           .filter((m) => !/storeFile\s*\(?\s*file\s*\(\s*["'](?:[^"']*[^a-z"'])?(?:debug|test|fake|dummy|sample|example)[^"']*["']/i.test(text.slice(Math.max(0, m.index - 300), m.index)))
           .map((m) => ({ name: m[1], value: m[2] })),
       ]

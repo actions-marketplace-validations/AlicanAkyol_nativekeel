@@ -230,6 +230,23 @@ test('signing material committed to git', () => {
   assert.ok(!byId['signing-password:android/app/build.gradle'], "the public 'android' debug password is fine");
 });
 
+test('a fallback keystore with a throwaway password, next to release signing from properties, is not the release key', () => {
+  const gradle = (pw) =>
+    "android { signingConfigs { release { } } }\nif (hasProperty('storeFile')) {\n    android.signingConfigs.release.storeFile = file(storeFile)\n    android.signingConfigs.release.storePassword = storePassword\n} else {\n    println 'Generating a debug package'\n    android.signingConfigs.release.storeFile = file(\"airbitz.keystore\")\n    android.signingConfigs.release.storePassword = \"" + pw + "\"\n    android.signingConfigs.release.keyPassword = \"" + pw + "\"\n}\n";
+  const run = (pw) => {
+    const root = makeProject(rnApp('0.80.0', { 'android/app/build.gradle': gradle(pw), 'android/app/airbitz.keystore': 'x', 'ios/App/PrivacyInfo.xcprivacy': '' }));
+    spawnSync('git', ['init', '-q'], { cwd: root });
+    spawnSync('git', ['add', '-A'], { cwd: root });
+    return ids(nativeChecks(loadProject(root), { now: NOW }));
+  };
+  const local = run('password');
+  assert.ok(!local.includes('signing-keystore:android/app/airbitz.keystore'), 'Edge: local fallback');
+  assert.ok(!local.includes('signing-password:android/app/build.gradle'));
+  const real = run('S3cr3t-Pw');
+  assert.ok(real.includes('signing-keystore:android/app/airbitz.keystore'), 'a real password in the fallback still counts');
+  assert.ok(real.includes('signing-password:android/app/build.gradle'));
+});
+
 test('RCTAppDependencyProvider is required in AppDelegate from React Native 0.77', () => {
   const files = (version, delegate, gradle = 'newArchEnabled=true\n') => rnApp(version, {
     'ios/App/AppDelegate.h': '#import <RCTAppDelegate.h>\n@interface AppDelegate : RCTAppDelegate\n@end',
@@ -385,4 +402,26 @@ test('release signed with the debug key: reported, unless EAS or CI signs it', (
   assert.equal(find({ 'fastlane/Fastfile': "gradle(task: 'bundle', properties: { 'android.injected.signing.store.file' => ENV['KEYSTORE'] })" }), undefined, 'Fastlane signs it');
   const signed = gradle.replace('            signingConfig signingConfigs.debug\n            minifyEnabled', '            signingConfig signingConfigs.release\n            minifyEnabled');
   assert.equal(nativeChecks(loadProject(makeProject(rnApp('0.80.0', { 'android/app/build.gradle': signed }))), { now: NOW }).find((f) => f.id === 'android-release-debug-signed'), undefined);
+});
+
+test('expo-sqlite options that add 4 KB-aligned prebuilt libraries', () => {
+  const app = (extra) => ({ 'package.json': { name: 'e', dependencies: { expo: '57.0.0', 'react-native': '0.85.0', 'expo-sqlite': '57.0.4' } }, ...extra });
+  const on = ids(check(app({ 'app.json': JSON.stringify({ expo: { plugins: [['expo-sqlite', { withSQLiteVecExtension: true }]] } }) })));
+  assert.ok(on.includes('android-16kb-expo-sqlite'));
+  assert.ok(ids(check(app({ 'android/gradle.properties': 'expo.sqlite.withSQLiteVecExtension=true\n', 'android/app/build.gradle': '' }))).includes('android-16kb-expo-sqlite'));
+  assert.ok(!ids(check(app({ 'app.json': JSON.stringify({ expo: { plugins: ['expo-sqlite'] } }) }))).includes('android-16kb-expo-sqlite'), 'default build is aligned');
+});
+
+test('a scanned repository cannot run commands through its own git config (core.fsmonitor)', async () => {
+  const { gitLsFiles } = await import('../src/git.js');
+  const root = makeProject({ 'package.json': '{}', 'a.txt': 'a' });
+  const git = (...args) => spawnSync('git', args, { cwd: root });
+  git('init', '-q');
+  git('add', '-A');
+  const marker = path.join(root, 'fsmonitor-ran');
+  git('config', 'core.fsmonitor', `touch "${marker}"; false`);
+  assert.ok(gitLsFiles(root).includes('a.txt'));
+  assert.equal(fs.existsSync(marker), false, 'the repository fsmonitor hook must not run');
+  spawnSync('git', ['ls-files'], { cwd: root });
+  assert.equal(fs.existsSync(marker), true, 'control: plain git ls-files does run it');
 });

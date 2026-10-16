@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
 import path from 'node:path';
 import { compareVersions } from './known-issues.js';
 
@@ -33,7 +33,7 @@ const read = (file) => {
   }
 };
 
-const SERVER_ONLY = /node\.?js|server[- ]side|\bhttp adapter\b|\bhttp\/2\b|\bssr\b|\bssrf\b|no_proxy|proxy-authorization|cloud metadata/i;
+const SERVER_ONLY = /node\.?js|server[- ]side|\bhttp adapter\b|\bhttp\/2\b|\bssr\b|\bssrf\b|no_proxy|proxy-authorization|config\.proxy|\bproxy is re-evaluated|cloud metadata|formDataToStream/i;
 const SEVERITY = { critical: 'critical', high: 'high', moderate: 'medium', low: 'low', info: 'low' };
 const RANK = ['low', 'medium', 'high', 'critical'];
 
@@ -76,7 +76,7 @@ export async function vulnerableDependencies(registry, versions, latestOf = {}) 
       id: `vuln:${name}`,
       severity,
       area: 'security',
-      title: `${name} ${version}: ${relevant.length} known vulnerabilit${relevant.length === 1 ? 'y' : 'ies'}${fixedIn ? ` (fixed in ${fixedIn})` : noFix ? ' (no fixed release)' : ''}`,
+      title: `${name} ${version}: ${relevant.length - serverOnly || relevant.length} known vulnerabilit${(relevant.length - serverOnly || relevant.length) === 1 ? 'y' : 'ies'}${serverOnly && serverOnly < relevant.length ? ` (+${serverOnly} for Node.js only)` : ''}${fixedIn ? ` (fixed in ${fixedIn})` : noFix ? ' (no fixed release)' : ''}`,
       detail: `${top.join('; ')}${relevant.length > 3 ? `; and ${relevant.length - 3} more` : ''}. ${fixedIn ? `Fixed in ${fixedIn}${fixedIn.startsWith('a release') ? '' : ' or later'}.` : noFix ? `No fixed release exists yet (the latest is ${newest}): replace it, or make sure it never handles untrusted input.` : 'Check the advisories for a fixed version.'}${serverOnly ? ` ${serverOnly} of them concern Node.js/server use only and are counted as low.` : ''} Source: GitHub Advisory Database (via npm).`,
       fix: { kind: 'vuln-dep', name, from: version, to: fixedIn, noFix, latest: newest || null, severity },
     });
@@ -228,7 +228,32 @@ export function webViewRisks(root) {
     const fileAccess = /allowFileAccessFromFileURLs\s*(?:=\s*\{\s*true\s*\}|(?=[\s/>]))/;
     if (universal.test(text) || fileAccess.test(text)) {
       const re = universal.test(text) ? universal : fileAccess;
-      findings.push({
+      // The flags only apply to pages with a file:// origin. A WebView that loads https URLs
+      // (Edge's partner pages) cannot be steered to file:// by its page: Chromium blocks that
+      // navigation. Local content: file:// URLs, bundled or downloaded HTML, inline html sources.
+      // The address often comes from another file (Notesnook: file:///android_asset in source.ts),
+      // so files this one imports by relative path are read too.
+      const localRe = /file:\/\/|android_asset|\bhtml\s*:|require\([^)]*\.html|DocumentDirectory|documentDirectory|cacheDirectory|CachesDirectory|Paths\.(?:document|cache|bundle)|baseUrl/;
+      const hasLocal = (t) => localRe.test(t.replace(/originWhitelist\s*=?\s*\{?\s*\[[^\]]*\]/g, '').replace(/^\s*originWhitelist\s*[:=][^\n]*$/gm, ''));
+      const imported = [...text.matchAll(/from\s+['"](\.{1,2}\/[^'"]+)['"]/g)].map((m) => {
+        const base = path.resolve(path.dirname(file), m[1]);
+        for (const ext of ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js']) {
+          const t = fs.existsSync(base + ext) && fs.statSync(base + ext).isFile() ? read(base + ext) : null;
+          if (t) return t;
+        }
+        return '';
+      });
+      const local = hasLocal(text) || imported.some(hasLocal);
+      if (!local) {
+        findings.push({
+          id: `webview-file-access:${rel}`,
+          severity: 'low',
+          area: 'security',
+          title: `WebView has file-URL access flags it does not need (${rel}:${lineOf(re)})`,
+          detail: 'allowUniversalAccessFromFileURLs / allowFileAccessFromFileURLs only affect pages loaded from file://, and this file loads web URLs, so today they do nothing. If a local HTML page is ever shown here, its scripts could read app files and call any origin: remove them now.',
+          fix: { kind: 'security', step: `In \`${rel}\`, remove \`allowUniversalAccessFromFileURLs\` / \`allowFileAccessFromFileURLs\` from the WebView.` },
+        });
+      } else findings.push({
         id: `webview-file-access:${rel}`,
         severity: 'high',
         area: 'security',
@@ -563,8 +588,14 @@ export function weakCrypto(root) {
     if (!text || !/CryptoJS|createCipheriv|md5|sha1|MD5|SHA1|Math\.random/.test(text)) continue;
     // Comments describing an algorithm are not code.
     const code = text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).replace(/\/\/[^\n]*/g, '');
+    const lines = text.split('\n');
     for (const rule of CRYPTO_RULES) {
-      const m = code.match(rule.re);
+      // A nonce in a mock or dummy server response (Edge: "// Dummy response") protects nothing.
+      const m = [...code.matchAll(new RegExp(rule.re.source, rule.re.flags.replace('g', '') + 'g'))].find((x) => {
+        if (rule.id !== 'insecure-random') return true;
+        const line = code.slice(0, x.index).split('\n').length;
+        return !/\b(?:dummy|mock|fake|stub)/i.test(lines.slice(Math.max(0, line - 6), line).join('\n'));
+      });
       if (m && !byRule.has(rule.id)) {
         // The Subsonic API (Navidrome, Airsonic) defines its login token as md5(password + salt):
         // the app cannot choose, so it is worth knowing, not an app bug.
@@ -606,7 +637,11 @@ export function tokenStorage(root) {
     for (const m of text.matchAll(/\b(?:AsyncStorage\.setItem|(?:storage|mmkv)\.set(?:String)?)\s*\(\s*([^,()]{1,60}),\s*([^;\n]{0,120})/g)) {
       if (seen.has(m.index)) continue;
       if (!/\b(?:access_?token|refresh_?token|auth_?token|id_?token|session_?token|login_?token|accessToken|refreshToken|authToken|idToken|sessionToken|loginToken|jwt|token)\b/i.test(m[2])) continue;
-      if (/push|fcm|apns|expo_?push|notif|device|firebase|messaging/i.test(m[1] + m[2])) continue;
+      // The key is often a constant: read its literal value from the same file.
+      const key = m[1].trim();
+      const constant = /^[A-Za-z_$][\w$]*$/.test(key) && text.match(new RegExp(`\\b(?:const|let|var)\\s+${key}\\s*=\\s*['"\`]([^'"\`]+)['"\`]`));
+      // Push/device tokens are not secrets; single-use invitation tokens do not sign anyone in.
+      if (/push|fcm|apns|expo_?push|notif|device|firebase|messaging|invit/i.test(`${key} ${constant ? constant[1] : ''} ${m[2]} ${path.basename(file)}`)) continue;
       hits.push(`${m[1].trim()} (${at(m.index)})`);
     }
   }
@@ -636,12 +671,13 @@ export const MASVS_GROUPS = {
 };
 
 export function masvsOf(id) {
-  if (/^(secret:|env-bundled|crypto-|expo-secret)/.test(id)) return 'CRYPTO';
+  if (/^(secret:|env-bundled|crypto-|expo-secret|ai-key-)/.test(id)) return 'CRYPTO';
+  if (/^(clipboard-|keychain-)/.test(id)) return 'STORAGE';
   if (/^(password-leak|token-unencrypted|android-allow-backup)/.test(id)) return 'STORAGE';
   if (/^(insecure-tls|user-certificates|plain-http|ios-ats|android-cleartext)/.test(id)) return 'NETWORK';
   if (/^(webview-|android-exported|deeplink-)/.test(id)) return 'PLATFORM';
   if (/^(firebase-|supabase-)/.test(id)) return 'AUTH';
-  if (/^(vuln:|signing-|android-debuggable)/.test(id)) return 'CODE';
+  if (/^(vuln:|signing-|android-debuggable|malicious-code|vscode-autorun)/.test(id)) return 'CODE';
   if (/^(sourcemap-in-app|easy-reverse-engineering)/.test(id)) return 'RESILIENCE';
   return null;
 }
@@ -758,6 +794,171 @@ export function expoConfigSecrets(root) {
     });
   }
   return findings;
+}
+
+// Wallet secrets copied to the clipboard (MASVS-STORAGE, MASTG "sensitive data in the
+// clipboard"). Background apps cannot read the clipboard since Android 10, but keyboards with
+// clipboard history and cloud clipboard sync keep a copy, and so does every app the user pastes
+// into. A file that clears the clipboard again (a timer that writes an empty string) is fine.
+const CLIPBOARD_SET = /(?:Clipboard\.setString|Clipboard\.setStringAsync|setStringAsync|Clipboard\.setText)\s*\(\s*([^;\n]{1,120})/g;
+const SECRET_WORDS = new Set(['mnemonic', 'mnemonics', 'seed', 'seedphrase', 'seedwords', 'privatekey', 'privkey', 'secretkey', 'recoveryphrase', 'secretphrase', 'xprv', 'wif', 'nsec']);
+const clipboardWords = (s) => s.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+export function clipboardSecrets(root) {
+  const hits = [];
+  for (const file of jsFiles(root)) {
+    const text = read(file);
+    if (!text || !/Clipboard|setStringAsync/.test(text)) continue;
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    // Cleared again later: setString('') / setStringAsync('') next to a timer.
+    if (/setTimeout[\s\S]{0,300}set(?:String|StringAsync|Text)\s*\(\s*(?:''|""|``)\s*\)/.test(code)) continue;
+    for (const m of code.matchAll(CLIPBOARD_SET)) {
+      const words = clipboardWords(m[1]);
+      const joined = words.join('');
+      const strong = /privatekey|privkey|mnemonic|secretkey|recoveryphrase|secretphrase|xprv|nsec|wif/.test(joined) || words.some((w) => ['mnemonic', 'mnemonics', 'xprv', 'wif', 'nsec'].includes(w));
+      // "displayPublicSeed": a seed word next to "public" is a public value.
+      if (!strong && (words.includes('public') || words.includes('pub') || words.includes('xpub'))) continue;
+      if (!strong && !words.some((w) => SECRET_WORDS.has(w)) && !/seedphrase/.test(joined)) continue;
+      hits.push(`${path.relative(root, file)}:${code.slice(0, m.index).split('\n').length}`);
+      break;
+    }
+  }
+  if (!hits.length) return [];
+  return [
+    {
+      id: 'clipboard-secret',
+      severity: 'medium',
+      area: 'security',
+      title: `A recovery phrase, private key or secret key is copied to the clipboard (${hits[0]}${hits.length > 1 ? ` and ${hits.length - 1} more` : ''})`,
+      detail: 'The clipboard is not private storage. Keyboards with clipboard history and cloud clipboard sync (Gboard, Samsung Keyboard, iCloud Universal Clipboard) keep a copy, every app the user pastes into receives it, and on Android 9 and older any background app can read it. If you keep the copy button, clear the clipboard again after about a minute, and on Android 13+ mark the clip as sensitive so it is hidden from the clipboard preview. (OWASP MASVS-STORAGE)',
+      fix: { kind: 'security', step: `Clear the clipboard after a short timeout where a recovery phrase or private key is copied (${hits.slice(0, 3).join(', ')}), or remove the copy option.` },
+    },
+  ];
+}
+
+// Keychain items readable while the device is locked (MASVS-STORAGE). Apple deprecated
+// kSecAttrAccessibleAlways and ...AlwaysThisDeviceOnly in iOS 12: "The data in the keychain item
+// can always be accessed regardless of whether the device is locked. Use an accessibility level
+// that provides some user protection, such as kSecAttrAccessibleAfterFirstUnlock." expo-secure-store
+// marks ALWAYS and ALWAYS_THIS_DEVICE_ONLY deprecated too. Library code that only maps the names
+// (react-native-keychain's own table, vendored copies) and test config are not the app's choice.
+const KEYCHAIN_ALWAYS_JS = /\b(?:ACCESSIBLE|SecureStore)\.ALWAYS(?:_THIS_DEVICE_ONLY)?\b|\baccessible\s*:\s*['"]Accessible(?:Always|AlwaysThisDeviceOnly)['"]/;
+const KEYCHAIN_ALWAYS_NATIVE = /\bkSecAttrAccessible\b[^;\n]{0,60}\bkSecAttrAccessibleAlways(?:ThisDeviceOnly)?\b|\bkSecAttrAccessibleAlways(?:ThisDeviceOnly)?\b[^;\n]{0,60}\bkSecAttrAccessible\b/;
+const NOT_APP_CODE = /(?:^|\/)(?:test|tests|__tests__|e2e|config\/test)\/|(?:^|\/)packages\/[^/]*keychain[^/]*\//i;
+
+export function keychainAccessibility(root) {
+  const hits = [];
+  for (const file of jsFiles(root)) {
+    const rel = path.relative(root, file).split(path.sep).join('/');
+    if (NOT_APP_CODE.test(rel)) continue;
+    const text = read(file);
+    if (!text || !/ALWAYS|AccessibleAlways/.test(text)) continue;
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    const m = code.match(KEYCHAIN_ALWAYS_JS);
+    if (m) hits.push(`${rel}:${code.slice(0, m.index).split('\n').length}`);
+  }
+  const iosDir = path.join(root, 'ios');
+  const walk = (dir, depth) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (depth < 4 && !/^(Pods|build|DerivedData|\..*)$/.test(e.name)) walk(p, depth + 1);
+      } else if (/\.(swift|m|mm)$/.test(e.name)) {
+        const text = read(p);
+        const m = text && text.match(KEYCHAIN_ALWAYS_NATIVE);
+        if (m) hits.push(`${path.relative(root, p).split(path.sep).join('/')}:${text.slice(0, m.index).split('\n').length}`);
+      }
+    }
+  };
+  walk(iosDir, 0);
+  if (!hits.length) return [];
+  return [
+    {
+      id: 'keychain-always-accessible',
+      severity: 'medium',
+      area: 'security',
+      title: `Keychain items stay readable while the device is locked (${hits[0]}${hits.length > 1 ? ` and ${hits.length - 1} more` : ''})`,
+      detail: 'The "Always" accessibility levels (ACCESSIBLE.ALWAYS, SecureStore.ALWAYS, kSecAttrAccessibleAlways and their THIS_DEVICE_ONLY variants) let the item be read whether or not the device is locked, so the keychain gives the data no protection from the device passcode. Apple deprecated them in iOS 12, and expo-secure-store marks them deprecated. Use AFTER_FIRST_UNLOCK (THIS_DEVICE_ONLY) for values background tasks need, and WHEN_UNLOCKED (THIS_DEVICE_ONLY) for everything else. (OWASP MASVS-STORAGE)',
+      fix: { kind: 'security', step: `Change the keychain accessibility at ${hits.slice(0, 3).join(', ')} to AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY (or WHEN_UNLOCKED_THIS_DEVICE_ONLY when no background access is needed).` },
+    },
+  ];
+}
+
+// AI provider keys read by app code from build-time variables. EXPO_PUBLIC_ variables,
+// react-native-config and react-native-dotenv inline the value into the JavaScript bundle, so
+// the key ships even though .env is not committed: anyone who unpacks the app can bill
+// requests to it. The variable name is enough; the value never needs to be in the repository.
+const AI_PROVIDERS = [
+  ['OPENAI', 'OpenAI', /api\.openai\.com/],
+  ['ANTHROPIC|CLAUDE', 'Anthropic', /api\.anthropic\.com/],
+  ['GEMINI|GOOGLE_AI|GOOGLE_GENAI|GENAI', 'Google Gemini', /generativelanguage\.googleapis\.com|@google\/gen(?:erative-)?ai/],
+  ['GROQ', 'Groq', /api\.groq\.com/],
+  ['MISTRAL', 'Mistral', /api\.mistral\.ai/],
+  ['DEEPSEEK', 'DeepSeek', /api\.deepseek\.com/],
+  ['OPENROUTER', 'OpenRouter', /openrouter\.ai\/api/],
+  ['XAI|GROK', 'xAI', /api\.x\.ai/],
+  ['REPLICATE', 'Replicate', /api\.replicate\.com/],
+  ['ELEVENLABS|ELEVEN_LABS', 'ElevenLabs', /api\.elevenlabs\.io/],
+  ['PERPLEXITY', 'Perplexity', /api\.perplexity\.ai/],
+  ['COHERE', 'Cohere', /api\.cohere\.(?:ai|com)/],
+  ['DEEPGRAM', 'Deepgram', /api\.deepgram\.com/],
+  ['ASSEMBLYAI', 'AssemblyAI', /api\.assemblyai\.com/],
+  ['FAL', 'fal.ai', /fal\.run|fal\.ai/],
+];
+const AI_NAME = new RegExp(`^[A-Z0-9_]*?(?:^|_)(${AI_PROVIDERS.map((p) => p[0]).join('|')})(?:_[A-Z0-9_]*)?_(?:API_)?(?:KEY|TOKEN|SECRET)$`);
+const AI_SERVER_DIRS = /^(?:functions|server|backend|api|cloud-functions|scripts|supabase|convex|worker|workers)(?:\/|$)|(?:^|\/)app\/api\/|\+api\.[jt]sx?$/;
+
+export function aiKeysInBundle(root, deps = {}) {
+  const expo = !!deps.expo;
+  const ways = [
+    expo && [/process\.env\.(EXPO_PUBLIC_[A-Z0-9_]+)/g, 'EXPO_PUBLIC_ variables are compiled into the JavaScript bundle'],
+    deps['react-native-config'] && [/\bConfig\.([A-Z0-9_]+)/g, 'react-native-config compiles its values into the app'],
+    (deps['react-native-dotenv'] || deps['module:react-native-dotenv']) && [/import\s*\{([^}]+)\}\s*from\s*['"](?:@env|react-native-dotenv)['"]/g, 'react-native-dotenv inlines its values into the JavaScript bundle'],
+  ].filter(Boolean);
+  if (!ways.length) return [];
+  const byProvider = new Map();
+  for (const file of jsFiles(root)) {
+    const rel = path.relative(root, file).split(path.sep).join('/');
+    if (AI_SERVER_DIRS.test(rel)) continue;
+    const text = read(file);
+    if (!text || !/KEY|TOKEN|SECRET/.test(text)) continue;
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    for (const [re, how] of ways) {
+      for (const m of code.matchAll(re)) {
+        for (const name of m[1].split(',').map((n) => n.trim().split(/\s+as\s+/)[0].replace(/^EXPO_PUBLIC_/, ''))) {
+          const hit = name.match(AI_NAME);
+          if (!hit) continue;
+          const provider = AI_PROVIDERS.find((p) => new RegExp(`^(?:${p[0]})$`).test(hit[1]));
+          if (!provider || byProvider.has(provider[1])) continue;
+          const full = m[0].startsWith('process.env.') ? m[1] : m[0].startsWith('Config.') ? `Config.${name}` : name;
+          byProvider.set(provider[1], { provider, name: full, how, where: `${rel}:${code.slice(0, m.index).split('\n').length}` });
+        }
+      }
+    }
+  }
+  if (!byProvider.size) return [];
+  // Direct calls from the app to the provider confirm the key is used on the device.
+  const direct = new Set();
+  for (const file of jsFiles(root)) {
+    const rel = path.relative(root, file).split(path.sep).join('/');
+    if (AI_SERVER_DIRS.test(rel)) continue;
+    const text = read(file) || '';
+    for (const { provider } of byProvider.values()) if (provider[2].test(text)) direct.add(provider[1]);
+  }
+  return [...byProvider.values()].map(({ provider, name, how, where }) => ({
+    id: `ai-key-in-bundle:${provider[1]}`,
+    severity: 'high',
+    area: 'security',
+    title: `${provider[1]} API key ships inside the app (${where})`,
+    detail: `The app reads ${name}, and ${how}${direct.has(provider[1]) ? `; the app also calls ${provider[1]} directly` : ''}. Anyone who unpacks the app gets the key and can run requests on your bill (AI keys are a favourite target of bundle scrapers). Move the ${provider[1]} call to a server you control (an Expo API route, a Firebase or Supabase function) that holds the key and checks who is calling, then revoke the current key. (OWASP MASVS-CRYPTO-2)`,
+    fix: { kind: 'security', step: `Move the ${provider[1]} call (${where}) behind your own server endpoint that keeps the key, then revoke the key that shipped.` },
+  }));
 }
 
 // Deep links (MASVS-PLATFORM). A web link (https://your.domain/...) opens the app only when the

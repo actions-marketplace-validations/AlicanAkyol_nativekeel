@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Every release must be visible (the owner's standing rule): README "What's new" (the npm page)
 // and the top changelog entry name the version in package.json. A release cannot go out without.
@@ -14,4 +16,97 @@ test('README "What\'s new" and the changelog match the package version', () => {
   assert.equal(readme[1], version, 'README "What\'s new" names the current version');
   const top = read('site/changelog.html').match(/<div class="rel"><h2>([\d.]+)<\/h2>/);
   assert.equal(top && top[1], version, 'the newest changelog entry is the current version');
+});
+
+test('every exported check is actually called (storeReviewRules was imported but never called from 0.1.42 to 0.1.51)', () => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
+  const all = Object.fromEntries(files.map((f) => [f, fs.readFileSync(path.join(dir, f), 'utf8')]));
+  const missing = [];
+  for (const f of ['native-security.js', 'mobile-security.js', 'authorization.js', 'security.js', 'store-rules.js', 'stability.js', 'native.js', 'performance.js', 'usage.js', 'interop.js']) {
+    for (const m of all[f].matchAll(/^export (?:async )?function (\w+)/gm)) {
+      const called = Object.entries(all).some(([g, text]) => {
+        const body = g === f ? text.replace(new RegExp(`export (?:async )?function ${m[1]}\\b`), '') : text.replace(/^import[^;]+;/gm, '');
+        return new RegExp(`\\b${m[1]}\\s*\\(`).test(body);
+      });
+      if (!called) missing.push(`${f}: ${m[1]}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+test('no hidden bidi or zero-width characters in our own code (Trojan Source)', () => {
+  const base = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const bad = [];
+  for (const dir of ['bin', 'src', 'test', 'scripts']) {
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(m?js|json)$/.test(e.name)) {
+          const text = fs.readFileSync(p, 'utf8');
+          if (/[\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/.test(text)) bad.push(path.relative(base, p));
+        }
+      }
+    };
+    if (fs.existsSync(path.join(base, dir))) walk(path.join(base, dir));
+  }
+  assert.deepEqual(bad, []);
+});
+
+test("the README What's new line keeps its fixed tail when the version changes", () => {
+  const readme = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const line = readme.split('\n').find((l) => l.startsWith("**What's new in "));
+  assert.ok(line, "README has a What's new line");
+  for (const part of ['Recent releases added', 'Every check is tuned on', '[All releases →](https://nativekeel.com/changelog)']) assert.ok(line.includes(part), `missing: ${part}`);
+});
+
+test('server.json (MCP Registry) matches package.json', () => {
+  const base = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
+  const server = JSON.parse(fs.readFileSync(path.join(base, 'server.json'), 'utf8'));
+  assert.equal(server.name, pkg.mcpName);
+  assert.equal(server.version, pkg.version);
+  assert.equal(server.packages[0].identifier, pkg.name);
+  assert.equal(server.packages[0].version, pkg.version);
+  assert.deepEqual(server.packages[0].packageArguments, [{ type: 'positional', value: 'mcp' }]);
+  assert.ok(server.description.length <= 100, 'the registry allows 100 characters');
+});
+
+test('Claude Code plugin runs a locked, published NativeKeel version', () => {
+  const base = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
+  const market = JSON.parse(fs.readFileSync(path.join(base, '.claude-plugin/marketplace.json'), 'utf8'));
+  const entry = market.plugins.find((p) => p.name === 'nativekeel');
+  const dir = path.join(base, entry.source);
+  const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+  const plugin = read('.claude-plugin/plugin.json');
+  assert.equal(plugin.name, entry.name, 'entry name and manifest name must match');
+  // CI (publish.yml, claude-plugin job) moves the plugin to each release after npm publish,
+  // because the lockfile needs the published tarball's hash. Until then it runs the previous one.
+  const [a, b] = [plugin.version, pkg.version].map((v) => v.split('.').map(Number));
+  assert.ok(a[0] < b[0] || (a[0] === b[0] && (a[1] < b[1] || (a[1] === b[1] && a[2] <= b[2]))), 'plugin version is not ahead of the package');
+  assert.deepEqual(read('package.json').dependencies, { nativekeel: plugin.version });
+  const locked = read('package-lock.json').packages['node_modules/nativekeel'];
+  assert.equal(locked.version, plugin.version);
+  assert.match(locked.integrity, /^sha512-/);
+  assert.equal(locked.resolved, `https://registry.npmjs.org/nativekeel/-/nativekeel-${plugin.version}.tgz`);
+  assert.deepEqual(read('.mcp.json').mcpServers.nativekeel, { command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/node_modules/nativekeel/bin/nativekeel.js', 'mcp'] });
+  for (const f of ['README.md', 'LICENSE', '.claude-plugin/icon.png']) assert.ok(fs.existsSync(path.join(dir, f)), `${f} is required by the directory`);
+  const skill = fs.readFileSync(path.join(dir, 'skills/react-native-health/SKILL.md'), 'utf8');
+  for (const tool of ['scan_project', 'upgrade_plan', 'check_library']) assert.ok(skill.includes(tool), `skill mentions ${tool}`);
+});
+
+test('Codex plugin matches the Claude plugin', () => {
+  const base = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const read = (f) => fs.readFileSync(path.join(base, f), 'utf8');
+  const claude = JSON.parse(read('plugins/nativekeel/.claude-plugin/plugin.json'));
+  const codex = JSON.parse(read('plugins/codex/nativekeel/plugin.json'));
+  assert.equal(codex.name, claude.name);
+  assert.equal(codex.version, claude.version, 'scripts/update-plugin.mjs moves both');
+  assert.deepEqual(JSON.parse(read('plugins/codex/nativekeel/mcp.json')).mcpServers.nativekeel, { type: 'stdio', command: 'npx', args: ['-y', `nativekeel@${claude.version}`, 'mcp'] });
+  assert.equal(read('plugins/codex/nativekeel/skills/react-native-health/SKILL.md'), read('plugins/nativekeel/skills/react-native-health/SKILL.md'), 'the two skill copies must be identical');
+  const market = JSON.parse(read('.agents/plugins/marketplace.json'));
+  assert.equal(market.plugins[0].source.path, './plugins/codex/nativekeel');
+  for (const f of ['README.md', 'LICENSE']) assert.ok(fs.existsSync(path.join(base, 'plugins/codex/nativekeel', f)), f);
 });

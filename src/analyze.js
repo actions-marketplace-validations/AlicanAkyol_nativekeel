@@ -1,12 +1,20 @@
-import fs from 'node:fs';
+import fs from './read-boundary.js';
+import { validPackageName } from './package-name.js';
 import path from 'node:path';
 import { cleanVersion, findPackageDir, installedVersion, versionFromSpec } from './project.js';
 import { createRegistry, fetchJson } from './registry.js';
-import { scanSecrets } from './secrets.js';
+import { scanSecrets, TEST_PATH } from './secrets.js';
 import { nativeChecks } from './native.js';
 import { stabilityChecks } from './stability.js';
 import { performanceChecks } from './performance.js';
-import { vulnerableDependencies, passwordLeaks, webViewRisks, androidBackup, exportedComponents, plainHttpCalls, cloudRules, insecureTls, weakCrypto, tokenStorage, reverseEngineering, expoConfigSecrets, deepLinks, supabaseRls, playRestrictedPermissions, masvsOf, MASVS_GROUPS } from './security.js';
+import { uiChecks } from './ui.js';
+import { bundleChecks, annotateWithBundle } from './bundle-map.js';
+import { vulnerableDependencies, passwordLeaks, webViewRisks, androidBackup, exportedComponents, plainHttpCalls, cloudRules, insecureTls, weakCrypto, tokenStorage, reverseEngineering, expoConfigSecrets, aiKeysInBundle, clipboardSecrets, keychainAccessibility, deepLinks, supabaseRls, playRestrictedPermissions, masvsOf, MASVS_GROUPS } from './security.js';
+import { mobileSecurity } from './mobile-security.js';
+import { nativeSecurity } from './native-security.js';
+import { securityOverview } from './security-review.js';
+import { maliciousCode } from './malware.js';
+import { supabaseBroadPolicies, firebaseBroadWrites } from './authorization.js';
 import { lockedVersions } from './lockfile.js';
 import { storeReviewRules } from './store-rules.js';
 import { expoPinnedNames, movesWithExpoSdk } from './expo-pins.js';
@@ -23,6 +31,7 @@ import {
   PLAY_TARGET_SDK,
   RENAMED,
   REPLACEMENTS,
+  PACKAGE_NOTES,
   SUPPORTED_EXPO_MAJORS,
   SUPPORTED_RN_MINORS,
 } from './rules.js';
@@ -120,6 +129,10 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
   const rnSpec = project.deps['react-native'] || project.devDeps['react-native'];
   if (!project.rnVersion && rnSpec) {
     warnings.push(`React Native is declared as "${rnSpec}", which has no version number (a git fork or a workspace reference). Install dependencies so NativeKeel can read the installed version; version checks were skipped.`);
+  }
+  if (project.skippedDeps?.length) {
+    const shown = project.skippedDeps.slice(0, 5).map((n) => JSON.stringify(n.replace(/[^\x20-\x7e]/g, '?').slice(0, 60)));
+    warnings.push(`Skipped ${project.skippedDeps.length} package.json entr${project.skippedDeps.length === 1 ? 'y' : 'ies'} that ${project.skippedDeps.length === 1 ? 'is' : 'are'} not a valid package name or version (${shown.join(', ')}${project.skippedDeps.length > 5 ? ', …' : ''}). Checks for ${project.skippedDeps.length === 1 ? 'it' : 'them'} were skipped.`);
   }
   if (project.isLibrary) {
     warnings.push('This looks like a React Native library, not an app (react-native is a peer dependency, or android/ builds a library). App Store and Google Play checks were skipped; scan the app that uses it for those.');
@@ -283,7 +296,8 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
     }
     // Only code that has to follow React Native or the OS goes stale; a finished JS utility does not.
     const stale = !dep.unmaintained && !revived && age !== null && age > STALE_RELEASE_DAYS && (native || !!release.rnLink);
-    const alternatives = RENAMED[name] ? [RENAMED[name]] : dir && dir.alternatives && dir.alternatives.length ? dir.alternatives : REPLACEMENTS[name] || [];
+    const candidateAlternatives = RENAMED[name] ? [RENAMED[name]] : dir && dir.alternatives && dir.alternatives.length ? dir.alternatives : REPLACEMENTS[name] || [];
+    const alternatives = Array.isArray(candidateAlternatives) ? candidateAlternatives.filter(validPackageName) : [];
     if (noNewArch || dep.unmaintained || stale) {
       const problems = [
         noNewArch && 'no New Architecture support',
@@ -300,7 +314,7 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
         severity: noNewArch || native ? 'high' : (stale && !dep.unmaintained && release.rnLink === 'name') || (release && !release.rnLink && !/react-native|expo|^@react-navigation\//.test(name)) ? 'low' : 'medium',
         area: 'dependency',
         title: `${name}: ${problems.join(', ')}`,
-        detail: `${why}${alternatives.length ? ` Alternatives: ${alternatives.join(', ')}.` : ''}`,
+        detail: `${why}${alternatives.length ? ` Alternatives: ${alternatives.join(', ')}.` : ''}${PACKAGE_NOTES[name] ? ` ${PACKAGE_NOTES[name]}` : ''}`,
         fix: { kind: 'replace-dep', name, native, noNewArch, unmaintained: dep.unmaintained || stale, alternatives, renamedTo: RENAMED[name] || null },
       });
     } else if (revived) {
@@ -361,24 +375,18 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
     }
   }
 
-  // Unused runtime dependencies: removing them is cheaper than upgrading them.
-  const unused = new Set();
+  // Absence of static references is a review candidate, not authority to remove a package.
   for (const u of findUnused(project)) {
-    unused.add(u.name);
     add({
       id: `unused:${u.name}`,
       severity: u.native ? 'medium' : 'low',
       area: 'dependency',
-      title: `${u.name} is installed but never used${u.native ? ' (native module)' : ''}`,
-      detail: `Not imported from JS, not referenced from native code, not required by another dependency.${u.native ? ' It still compiles into both apps and has to survive every upgrade.' : ''} Remove it.`,
-      fix: { kind: 'remove-dep', name: u.name, native: u.native },
+      title: `Review possible unused dependency: ${u.name}${u.native ? ' (native module)' : ''}`,
+      detail: 'No use was found in the source, native/config references and installed dependency declarations checked. Dynamic imports, generated code and native auto-registration may still need it. Confirm all target platforms and build variants before trying removal on a separate branch. No size or performance saving has been measured.',
+      fix: { kind: 'review-dep', name: u.name, native: u.native },
     });
   }
-  // A package you are about to delete does not need upgrade advice.
-  for (let i = findings.length - 1; i >= 0; i--) {
-    const f = findings[i];
-    if (f.fix && ['replace-dep', 'bump-dep'].includes(f.fix.kind) && unused.has(f.fix.name)) findings.splice(i, 1);
-  }
+  // Keep upgrade/replacement advice: a usage candidate does not establish that it is safe to delete.
 
   // Known version-specific breakages, learned from real upgrades.
   const newArchOn = project.newArch.android !== false && project.newArch.ios !== false && minorOf(current || '0.0') >= 76;
@@ -426,16 +434,24 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
       id: 'rn-prerelease',
       severity: 'info',
       area: 'react-native',
-      title: `React Native ${current} is ahead of the latest stable release (${rn.latest})`,
+      title: `React Native ${current}${project.rnPrerelease ? `-${project.rnPrerelease}` : ''} is ahead of the latest stable release (${rn.latest})`,
       detail: 'Library compatibility tables do not cover it yet, so version checks for Reanimated, Gesture Handler and Screens are skipped. Check each library\'s release notes for this React Native version.',
     });
   }
   if (current && !aheadOfStable) {
     const rnMinor = minorOf(current);
+    // react-native.config.js can build a library's native side from another folder (Edge links
+    // Reanimated 3 on its legacy-architecture Android build through a shim, Reanimated 4 on iOS).
+    // The installed version then says nothing about the architecture that build runs on.
+    let rnConfig = '';
+    try {
+      rnConfig = fs.readFileSync(path.join(project.root, 'react-native.config.js'), 'utf8');
+    } catch {}
+    const ownNative = (name) => new RegExp(`['"]${name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}['"]\\s*:\\s*\\{[^}]{0,400}sourceDir`).test(rnConfig);
     for (const dep of deps.filter((d) => COMPAT[d.name])) {
       const pinned = expoPins && expoPins[dep.name];
       if (pinned && dep.version && satisfiesExpoRange(dep.version, pinned)) continue;
-      const problem = checkCompat(dep.name, dep.version, rnMinor, newArchOn);
+      const problem = !newArchOn && ownNative(dep.name) ? null : checkCompat(dep.name, dep.version, rnMinor, newArchOn);
       // Also check the architecture this app has to move to.
       const ahead = !problem && newArchRequired ? checkCompat(dep.name, dep.version, rnMinor, true) : null;
       if (!problem && !ahead) continue;
@@ -477,6 +493,13 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
   for (const f of stabilityChecks(project)) add(f);
   // Static signs of performance problems.
   for (const f of performanceChecks(project)) add(f);
+  // Screen reader labels and text scaling.
+  const ui = uiChecks(project);
+  for (const f of ui.findings) add(f);
+  // Measured bundle composition, when a release build left its source map behind.
+  const bundle = bundleChecks(project.root);
+  for (const f of bundle.findings) add(f);
+  annotateWithBundle(findings, bundle);
 
   // Packages off the versions the Expo SDK pins (what `npx expo install --check` reports). Older
   // than the SDK expects is a common build failure or launch crash; newer is usually a choice the
@@ -514,8 +537,11 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
     }
   }
 
+  // App Store / Google Play review rules the code can show.
+  if (!project.isLibrary) for (const f of storeReviewRules(project, now)) add(f);
+
   // Security beyond leaked keys.
-  for (const f of [...passwordLeaks(project.root), ...webViewRisks(project.root), ...androidBackup(project.root), ...exportedComponents(project.root), ...plainHttpCalls(project.root), ...cloudRules(project.root, project.deps, now), ...insecureTls(project.root), ...weakCrypto(project.root), ...tokenStorage(project.root), ...reverseEngineering(project.root, project), ...expoConfigSecrets(project.root), ...deepLinks(project.root, project.deps), ...supabaseRls(project.root), ...(project.isLibrary ? [] : playRestrictedPermissions(project.root, project.deps))]) add(f);
+  for (const f of [...passwordLeaks(project.root), ...webViewRisks(project.root), ...androidBackup(project.root), ...exportedComponents(project.root), ...plainHttpCalls(project.root), ...cloudRules(project.root, project.deps, now), ...insecureTls(project.root), ...weakCrypto(project.root), ...tokenStorage(project.root), ...reverseEngineering(project.root, project), ...expoConfigSecrets(project.root), ...aiKeysInBundle(project.root, { ...project.devDeps, ...project.deps }), ...clipboardSecrets(project.root), ...keychainAccessibility(project.root), ...deepLinks(project.root, project.deps), ...supabaseRls(project.root), ...supabaseBroadPolicies(project.root), ...firebaseBroadWrites(project.root), ...(project.isLibrary ? [] : playRestrictedPermissions(project.root, project.deps)), ...maliciousCode(project.root)]) add(f);
   if (!forcedOffline) {
     // Exact versions only (installed, else the lockfile): a range would be a guess.
     const locked = lockedVersions(project.root, project.deps);
@@ -552,7 +578,18 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
         area: 'secret',
         title: `${s.label} in a commented-out line (${where})`,
         detail: `${value}Comments are not shipped in the app, but the line is in the repository and its git history. If the value is real, rotate it; either way, delete the line.`,
-        fix: { kind: 'secret', label: s.label, file: s.file, line: s.line, bundled: false },
+        fix: { kind: 'secret', label: s.label, file: s.file, line: s.line, bundled: false, exposure: 'comment' },
+      });
+    } else if (s.committed !== false && s.rule === 'private-key' && TEST_PATH.test(s.file.split(path.sep).join('/'))) {
+      // A key pair made for a test (Edge signs and verifies a sample payload with one) unlocks
+      // nothing, unless the same key is also used for real.
+      add({
+        id: `secret:${s.rule}:${s.file}`,
+        severity: 'low',
+        area: 'secret',
+        title: `Private key in a test file (${where})`,
+        detail: `${value}Test code is not shipped, and a key generated for a test protects nothing. Make sure it is not also used by a real server or service; if it is, rotate it.`,
+        fix: { kind: 'secret', label: s.label, file: s.file, line: s.line, bundled: false, exposure: 'test-key' },
       });
     } else if (s.committed !== false) {
       add({
@@ -561,28 +598,36 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
         area: 'secret',
         title: `${s.label} committed to the repository (${where})`,
         detail: `${value}Not shipped in the app, but everyone with repo access has it and it stays in git history. Rotate it and load it from the environment instead.`,
-        fix: { kind: 'secret', label: s.label, file: s.file, line: s.line, bundled: false },
+        fix: { kind: 'secret', label: s.label, file: s.file, line: s.line, bundled: false, exposure: 'repository' },
       });
     }
   }
 
+  const native = nativeSecurity(project.root);
+  for (const f of native.findings) add(f);
+  const mobile = mobileSecurity(project.root);
+  for (const f of mobile.findings) add(f);
   reportIncomplete();
-  // OWASP MASVS group for every security finding, and a per-group count (zero means checked, clean).
+  // OWASP MASVS group for every security finding, and a per-group finding count (zero is not proof of a passed control).
   const security = Object.fromEntries(Object.keys(MASVS_GROUPS).map((g) => [g, 0]));
   for (const f of findings) {
-    const g = masvsOf(f.id);
+    const g = f.masvs || masvsOf(f.id);
     if (!g) continue;
     f.masvs = g;
     if (f.severity !== 'info') security[g]++;
   }
   findings.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity));
-  return {
+  const result = {
     tool: 'nativekeel',
+    mobileSecurityCoverage: mobile.coverage,
+    nativeSecurityCoverage: native.coverage,
+    accessibilityCoverage: ui.coverage,
+    bundleMeasurement: bundle.measured,
     scannedAt: now.toISOString(),
     project: {
       name: project.name,
       root: project.root,
-      reactNative: project.rnVersion,
+      reactNative: project.rnVersion && project.rnPrerelease ? `${project.rnVersion}-${project.rnPrerelease}` : project.rnVersion,
       expo: project.expoVersion,
       managed: project.managed,
       newArch: project.newArch,
@@ -596,6 +641,8 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
     deps,
     findings,
   };
+  result.securityReview = securityOverview(result);
+  return result;
 }
 
 export const countBySeverity = (findings) =>

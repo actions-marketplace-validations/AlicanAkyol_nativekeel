@@ -1,4 +1,5 @@
 import test from 'node:test';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { loadProject } from '../src/project.js';
 import { stabilityChecks } from '../src/stability.js';
@@ -28,6 +29,23 @@ test('mixed Firebase and Navigation majors', () => {
   assert.ok(!ids(app({ '@react-native-firebase/app': '22.2.1', '@react-native-firebase/messaging': '22.4.0' })).includes('crash-firebase-versions'));
   assert.ok(ids(app({ '@react-navigation/native': '7.1.0', '@react-navigation/bottom-tabs': '6.6.1' })).includes('crash-navigation-versions'));
   assert.ok(!ids(app({ '@react-navigation/native': '5.9.4', '@react-navigation/web': '1.0.0', '@react-navigation/compat': '5.3.20' })).includes('crash-navigation-versions'), 'own version lines');
+});
+
+test('mixed Navigation majors crash only with two copies of the core', () => {
+  const find = (files) => stabilityChecks(loadProject(makeProject(files))).find((f) => f.id === 'crash-navigation-versions');
+  const deps = { '@react-navigation/native': '7.1.9', '@react-navigation/bottom-tabs': '6.6.1' };
+  const bun = '{\n  "packages": {\n    "@react-navigation/bottom-tabs": ["@react-navigation/bottom-tabs@6.6.1", "", {}],\n    "@react-navigation/native": ["@react-navigation/native@7.1.9", "", {}],\n  }\n}\n';
+  assert.equal(find(app(deps, { 'bun.lock': bun })).severity, 'medium', 'one copy: unsupported, not a crash (Uniswap ships this)');
+  const npmLock = {
+    lockfileVersion: 3,
+    packages: {
+      'node_modules/@react-navigation/native': { version: '7.1.9' },
+      'node_modules/@react-navigation/bottom-tabs/node_modules/@react-navigation/native': { version: '6.1.18' },
+    },
+  };
+  assert.equal(find(app(deps, { 'package-lock.json': npmLock })).severity, 'high', 'two copies of the core');
+  const yarn = '"@react-navigation/native@^7.1.9":\n  version "7.1.9"\n\n"@react-navigation/native@^6.0.0":\n  version "6.1.18"\n';
+  assert.equal(find(app(deps, { 'yarn.lock': yarn })).severity, 'high', 'yarn: two resolved majors');
 });
 
 test('a second React inside a runtime dependency, not inside dev tooling', () => {
@@ -64,6 +82,9 @@ test('iOS usage descriptions: missing key flagged; add-only photo key and Expo p
   assert.ok(!ids(withCam(['NSCameraUsageDescription', 'NSPhotoLibraryAddUsageDescription'])).includes('crash-ios-usage-description'));
   const expo = { 'package.json': { name: 'e', dependencies: { expo: '52.0.0', 'react-native': '0.76.0', 'expo-camera': '16.0.0' } }, 'ios/App/Info.plist': plist([]), 'app.json': JSON.stringify({ expo: { plugins: ['expo-camera'] } }) };
   assert.ok(!ids(expo).includes('crash-ios-usage-description'), 'the Expo config plugin adds it at prebuild');
+  const face = (pkg) => stabilityChecks(loadProject(makeProject({ ...app({ [pkg]: '15.0.0' }), 'ios/App/Info.plist': plist([]) }))).map((x) => `${x.id}:${x.severity}`);
+  assert.deepEqual(face('expo-local-authentication').filter((x) => /faceid|usage-description/.test(x)), ['ios-faceid-description:medium'], 'Expo Go: the library checks the key, Face ID just never shows');
+  assert.ok(face('react-native-biometrics').includes('crash-ios-usage-description:high'), 'other libraries crash since iOS 17');
 });
 
 test('APIs removed from React Native core: crash now or after the upgrade', () => {
@@ -79,6 +100,11 @@ test('APIs removed from React Native core: crash now or after the upgrade', () =
   assert.match(importOnly.title, /unused import/);
   assert.equal(src('0.85.0', "import { DatePickerAndroid } from 'react-native';\n/* old: DatePickerAndroid.open() */\n{/* DatePickerAndroid */}").severity, 'low', 'mentions in comments are not uses');
   assert.equal(src('0.80.0', "import { View, Text } from 'react-native';\nimport AsyncStorage from '@react-native-async-storage/async-storage';"), undefined);
+  const im = "import { InteractionManager } from 'react-native';\nInteractionManager.runAfterInteractions(() => load());";
+  assert.equal(src('0.86.0', im), undefined, 'before 0.87 InteractionManager works; the upcoming-changes check covers it');
+  const imNow = src('0.87.1', im);
+  assert.equal(imNow.severity, 'high');
+  assert.match(imNow.detail, /InteractionManager \(src\/A\.js:1\) → requestIdleCallback/);
 });
 
 test('APIs deprecated in React Native core (removal announced): low, with the replacement', () => {
@@ -118,4 +144,15 @@ test('dev server: server actions, named local fallbacks and local-service probes
   assert.equal(run({ 'src/actions/eval.ts': "'use server';\nconst r = await fetch(`http://localhost:8081/x.bundle`);" }).length, 0);
   assert.equal(run({ 'src/api-base.ts': "const LOCAL_API_URL = 'http://localhost:54321';\nconst API_URL = process.env.EXPO_PUBLIC_API_URL || LOCAL_API_URL;" }).length, 0);
   assert.equal(run({ 'src/oracle.ts': "// Auto-detect Ollama on localhost\ntry { const r = await fetch('http://localhost:11434/api/tags'); } catch {}" }).length, 0);
+});
+
+test('expo-updates with a manually managed runtime version gets a note; the fingerprint policy does not', () => {
+  const ota = (runtimeVersion) => {
+    const root = makeProject({ 'package.json': { name: 'x', dependencies: { expo: '~57.0.0', 'expo-updates': '~57.0.0', 'react-native': '0.86.3' } }, 'app.json': { expo: { name: 'x', runtimeVersion } } });
+    try { return stabilityChecks(loadProject(root)).find((f) => f.id === 'ota-runtime-version-manual'); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  };
+  assert.match(ota({ policy: 'appVersion' }).title, /appVersion runtime version policy/);
+  assert.equal(ota('1.0.0').severity, 'info');
+  assert.match(ota('1.0.0').title, /hand-written runtimeVersion string/);
+  assert.equal(ota({ policy: 'fingerprint' }), undefined);
 });
