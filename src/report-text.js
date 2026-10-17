@@ -4,7 +4,7 @@ import { startHere } from './plan.js';
 
 const ISSUE_URL = 'https://github.com/AlicanAkyol/nativekeel/issues/new?template=false-alarm.yml';
 // Findings with an outside deadline (store rules, end of support, removed architecture).
-const DEADLINE_IDS = /^(rn-unsupported|expo-unsupported|new-arch-disabled|play-target-sdk|android-16kb|ios-uiscene-required|ios-privacy-manifest)/;
+export const DEADLINE_IDS = /^(rn-unsupported|expo-unsupported|new-arch-disabled|play-target-sdk|android-16kb|ios-uiscene-required|ios-privacy-manifest)/;
 
 export function textReport(result, { color = true, verbose = false } = {}) {
   const paint = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -70,11 +70,19 @@ export function textReport(result, { color = true, verbose = false } = {}) {
     out.push('');
   }
 
+  if (result.settings && result.settings.ignored.length) {
+    const ig = result.settings.ignored;
+    out.push(c.gray(`${result.settings.file}: ${ig.length} finding${ig.length === 1 ? '' : 's'} ignored by the team (${ig.slice(0, 3).map((i) => `${i.id}: ${i.reason}`).join('; ')}${ig.length > 3 ? '; …' : ''}).`));
+  }
   if (result.baseline) {
     out.push(c.gray(`Baseline ${result.baseline.file}: ${result.baseline.suppressed} known findings hidden${result.baseline.fixed.length ? `, ${result.baseline.fixed.length} fixed since` : ''}.`));
   }
   const n = countBySeverity(result.findings);
   out.push(`${c.bold('Summary')}  ${c.red(`${n.critical} critical`)} · ${c.yellow(`${n.high} high`)} · ${n.medium} medium · ${n.low} low`);
+  if (result.ratings) {
+    const paintRating = (r) => (r === 'A' || r === 'B' ? c.green(r) : r === 'C' ? c.yellow(r) : c.red(r));
+    out.push(`${c.bold('Ratings')}  ${result.ratings.map((r) => `${r.label} ${paintRating(r.rating)}`).join(' · ')}${c.gray('  ·  A = nothing found, E = a critical finding')}`);
+  }
   if (result.security) {
     const groups = Object.entries(result.security);
     const withIssues = groups.filter(([, k]) => k > 0).map(([g, k]) => `${g.toLowerCase()} ${k}`);
