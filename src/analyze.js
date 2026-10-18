@@ -11,7 +11,7 @@ import { stabilityChecks } from './stability.js';
 import { performanceChecks } from './performance.js';
 import { uiChecks } from './ui.js';
 import { bundleChecks, annotateWithBundle } from './bundle-map.js';
-import { vulnerableDependencies, passwordLeaks, webViewRisks, androidBackup, exportedComponents, plainHttpCalls, cloudRules, insecureTls, weakCrypto, tokenStorage, reverseEngineering, expoConfigSecrets, aiKeysInBundle, clipboardSecrets, keychainAccessibility, deepLinks, supabaseRls, playRestrictedPermissions, masvsOf, MASVS_GROUPS } from './security.js';
+import { vulnerableDependencies, passwordLeaks, webViewRisks, androidBackup, exportedComponents, plainHttpCalls, cloudRules, insecureTls, weakCrypto, tokenStorage, reverseEngineering, expoConfigSecrets, aiKeysInBundle, backendAdminInBundle, clipboardSecrets, keychainAccessibility, deepLinks, supabaseRls, playRestrictedPermissions, masvsOf, MASVS_GROUPS } from './security.js';
 import { mobileSecurity } from './mobile-security.js';
 import { nativeSecurity } from './native-security.js';
 import { securityOverview } from './security-review.js';
@@ -157,7 +157,7 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
         id: 'rn-via-expo',
         severity: 'info',
         area: 'react-native',
-        title: `React Native ${current} comes with Expo SDK ${majorOf(project.expoVersion)}`,
+        title: `React Native ${current} moves with the Expo SDK (${majorOf(project.expoVersion)})`,
         detail: `Latest React Native is ${rn.latest} (${behind} minor${behind === 1 ? '' : 's'} behind). Upgrading the Expo SDK upgrades React Native with it.`,
       });
     } else if (behind >= SUPPORTED_RN_MINORS) {
@@ -428,6 +428,24 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
   const expoExact = project.expoVersion ? exactOf('expo') : null;
   if (!expoPins && expoExact && !forcedOffline) expoPins = await registry.expoPins(expoExact);
   const expoSdk = project.expoVersion ? majorOf(project.expoVersion) : null;
+  // The React Native the Expo SDK's native modules are built against. A different minor is a
+  // common cause of build failures and launch crashes; the generic pin check below skips
+  // react-native, so it is compared here.
+  const expoRn = expoPins && expoPins['react-native'] ? String(expoPins['react-native']).replace(/^[~^>=\s]+/, '') : null;
+  if (expoRn && current && minorOf(expoRn) !== minorOf(current)) {
+    const rc = /-/.test(expoRn);
+    add({
+      id: 'expo-rn-mismatch',
+      severity: 'high',
+      area: 'expo',
+      title: `Expo SDK ${expoSdk} expects React Native ${expoRn}, the app has ${current}`,
+      detail: `The SDK's native modules are built against React Native 0.${minorOf(expoRn)}; a different minor is a common cause of build failures and launch crashes. Set react-native to the version the SDK expects (\`npx expo install react-native\`, or \`npx expo install --fix\` for every pinned package).${rc ? ` This expo release (${expoExact || project.expoVersion}) still pins a release candidate: update expo to the latest ${expoSdk}.x first, which pins the stable React Native.` : ''}`,
+      fix: { kind: 'crash', step: `Put react-native on the version Expo SDK ${expoSdk} expects${rc ? ' after updating expo to the latest ' + expoSdk + '.x' : ''} (\`npx expo install react-native\`).` },
+    });
+    // The "moves with the Expo SDK" note would contradict it.
+    const note = findings.findIndex((f) => f.id === 'rn-via-expo');
+    if (note >= 0) findings.splice(note, 1);
+  }
   // A React Native ahead of the latest stable (a release candidate) is not in the libraries'
   // compatibility tables yet: say so instead of calling every library incompatible.
   const aheadOfStable = !!(current && rn && rn.latest && minorOf(current) > minorOf(rn.latest));
@@ -543,7 +561,7 @@ export async function analyze(project, { get, now = new Date(), offline: forcedO
   if (!project.isLibrary) for (const f of storeReviewRules(project, now)) add(f);
 
   // Security beyond leaked keys.
-  for (const f of [...passwordLeaks(project.root), ...webViewRisks(project.root), ...androidBackup(project.root), ...exportedComponents(project.root), ...plainHttpCalls(project.root), ...cloudRules(project.root, project.deps, now), ...insecureTls(project.root), ...weakCrypto(project.root), ...tokenStorage(project.root), ...reverseEngineering(project.root, project), ...expoConfigSecrets(project.root), ...aiKeysInBundle(project.root, { ...project.devDeps, ...project.deps }), ...clipboardSecrets(project.root), ...keychainAccessibility(project.root), ...deepLinks(project.root, project.deps), ...supabaseRls(project.root), ...supabaseBroadPolicies(project.root), ...firebaseBroadWrites(project.root), ...(project.isLibrary ? [] : playRestrictedPermissions(project.root, project.deps)), ...maliciousCode(project.root)]) add(f);
+  for (const f of [...passwordLeaks(project.root), ...webViewRisks(project.root), ...androidBackup(project.root), ...exportedComponents(project.root), ...plainHttpCalls(project.root), ...cloudRules(project.root, project.deps, now), ...insecureTls(project.root), ...weakCrypto(project.root), ...tokenStorage(project.root), ...reverseEngineering(project.root, project), ...expoConfigSecrets(project.root), ...aiKeysInBundle(project.root, { ...project.devDeps, ...project.deps }), ...backendAdminInBundle(project.root, { ...project.devDeps, ...project.deps }), ...clipboardSecrets(project.root), ...keychainAccessibility(project.root), ...deepLinks(project.root, project.deps), ...supabaseRls(project.root), ...supabaseBroadPolicies(project.root), ...firebaseBroadWrites(project.root), ...(project.isLibrary ? [] : playRestrictedPermissions(project.root, project.deps)), ...maliciousCode(project.root)]) add(f);
   if (!forcedOffline) {
     // Exact versions only (installed, else the lockfile): a range would be a guess.
     const locked = lockedVersions(project.root, project.deps);

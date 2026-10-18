@@ -379,7 +379,7 @@ If the call is inside a library rather than your code, update the library; patch
   },
   {
     slug: 'rctcomponent-h-file-not-found-react-native-0-87',
-    updated: '2026-10-17',
+    updated: '2026-10-18',
     error: "'RCTComponent.h' file not found",
     title: "'RCTBridge.h' file not found after React Native 0.87",
     description: "iOS build fails with 'RCTComponent.h' or 'RCTBridge.h' file not found after React Native 0.87: which libraries cause it, the fix and a workaround.",
@@ -409,7 +409,7 @@ A few headers still resolve in quotes (\`RCTFabricComponentsPlugins.h\`, \`RCTCo
 | @react-native-menu/menu 2.0.0 | "RCTBridge.h" | [issue #1221](https://github.com/react-native-menu/menu/issues/1221), fix proposed in [PR #1227](https://github.com/react-native-menu/menu/pull/1227) |
 | react-native-bottom-tabs 1.4.0 | "RCTConversions.h" | [fixed on main](https://github.com/callstack/react-native-bottom-tabs/issues/584), next release |
 | react-native-ios-context-menu 3.2.1 | "RCTBridge.h" | fix proposed in [PR #145](https://github.com/dominicstop/react-native-ios-context-menu/pull/145) |
-| react-native-ios-utilities 5.2.0 | "RCTBridge.h" | same import, no report yet |
+| react-native-ios-utilities 5.2.0 | "RCTBridge.h" | also fails on 0.87 for other reasons (removed legacy-architecture APIs, Swift errors): fixing the imports alone is not enough |
 
 **Fix.** Update the library if a release has the change. Otherwise add the namespace yourself and keep it with patch-package:
 
@@ -422,13 +422,67 @@ A few headers still resolve in quotes (\`RCTFabricComponentsPlugins.h\`, \`RCTCo
 npx patch-package react-native-date-picker
 \`\`\`
 
-If your own iOS code (AppDelegate, native modules) has the same imports, change them the same way.
+Your app's own files (AppDelegate, a Swift bridging header) are not affected: compiled in the app target of a 0.87.1 app, \`<RCTAppDelegate.h>\`, \`<RCTBridge.h>\` and \`"RCTAppDelegate.h"\` all still resolve. The failure is in libraries, which CocoaPods builds as separate targets.
 
 **Workaround while you wait.** Building React Native from source still resolves the quoted form, at the cost of much slower clean builds. Bare CLI: \`RCT_USE_PREBUILT_RNCORE=0 bundle exec pod install\`. Expo: set \`buildReactNativeFromSource: true\` under \`ios\` in the \`expo-build-properties\` plugin, then prebuild again. It does not help with \`#import <RCTBridge.h>\`.
 
-**Check your project.** \`npx nativekeel\` reads the iOS sources of your installed libraries and your own code. Before the upgrade it lists them as work for 0.87; after it, as the reason the build fails, with file and line.
+**Check your project.** \`npx nativekeel\` reads the iOS sources of your installed libraries. Before the upgrade it lists them as work for 0.87; after it, as the reason the build fails, with file and line.
 `,
-    sources: [['React Native 0.87 release notes: Headers Breaking Changes', 'https://reactnative.dev/blog/2026/08/11/react-native-0.87#headers-breaking-changes'], ['Expo: expo-build-properties, buildReactNativeFromSource', 'https://docs.expo.dev/versions/latest/sdk/build-properties/']],
+    sources: [['The full experiment: I compiled every React Native 0.87 header (dev.to)', 'https://dev.to/keel_alican_akyol/rctbridgeh-file-not-found-i-compiled-every-react-native-087-header-to-see-which-imports-break-22go'], ['React Native 0.87 release notes: Headers Breaking Changes', 'https://reactnative.dev/blog/2026/08/11/react-native-0.87#headers-breaking-changes'], ['Expo: expo-build-properties, buildReactNativeFromSource', 'https://docs.expo.dev/versions/latest/sdk/build-properties/']],
+  },
+  {
+    slug: 'maximum-update-depth-exceeded-react-native',
+    updated: '2026-10-18',
+    error: 'Maximum update depth exceeded',
+    title: '"Maximum update depth exceeded" in React Native: the fix',
+    description: 'Fix "Too many re-renders" and "Maximum update depth exceeded" in React Native: the three patterns behind the loop, with before and after code.',
+    body: `
+The screen freezes, then React stops with one of these:
+
+\`\`\`
+Too many re-renders. React limits the number of renders to prevent an infinite loop.
+\`\`\`
+
+\`\`\`
+Maximum update depth exceeded. This can happen when a component calls setState inside useEffect, but useEffect either doesn't have a dependency array, or one of the dependencies changes on every render.
+\`\`\`
+
+**Why.** A state update runs on every render. The update renders the component again, which runs the update again, and React stops the loop. Three patterns cause almost all of them.
+
+**1. A handler that is called instead of passed.** React's own docs name this the most common cause.
+
+\`\`\`
+- <Pressable onPress={setOpen(true)}>
++ <Pressable onPress={() => setOpen(true)}>
+\`\`\`
+
+**2. An effect with no dependency array that sets state.** It runs after every render, and a new object or array is always a change.
+
+\`\`\`
+- useEffect(() => {
+-   setItems(data.filter((d) => d.visible));
+- });
++ const items = useMemo(() => data.filter((d) => d.visible), [data]);
+\`\`\`
+
+Derive the value during render (or with \`useMemo\`) instead of copying it into state. If it really has to be state, give the effect the dependencies it reads.
+
+**3. An effect that changes the state it depends on.**
+
+\`\`\`
+- useEffect(() => {
+-   setCount(count + 1);
+- }, [count]);
++ useEffect(() => {
++   if (count < limit) setCount(count + 1);
++ }, [count, limit]);
+\`\`\`
+
+The same happens when a dependency is an object or function created during render: it is new every time. Move it inside the effect, or wrap it in \`useMemo\` / \`useCallback\`.
+
+**Check your project.** \`npx nativekeel\` reports these three patterns with file and line. It only reports the certain cases: a setter inside an \`if\`, after an early return, or with a value that does not change is left alone, because React stops when the value stays the same.
+`,
+    sources: [['React: "Too many re-renders" (useState troubleshooting)', 'https://react.dev/reference/react/useState#im-getting-an-error-too-many-re-renders'], ['React: My Effect keeps re-running in an infinite cycle', 'https://react.dev/reference/react/useEffect#my-effect-keeps-re-running-in-an-infinite-cycle'], ['React source: the "Maximum update depth exceeded" messages', 'https://github.com/facebook/react/blob/main/packages/react-reconciler/src/ReactFiberWorkLoop.js']],
   },
   {
     slug: 'supabase-rls-disabled',
@@ -509,6 +563,7 @@ Enable the Sign in with Apple capability for the app ID, show Apple's button nex
   },
   {
     slug: 'google-play-target-api-level',
+    updated: '2026-10-18',
     error: 'Your app currently targets API level 34 and must target at least API level 36',
     title: 'Google Play "must target at least API level": React Native',
     description: 'What Google Play\'s target API level error means for React Native and Expo apps in 2026, the deadlines, and what usually breaks when you raise targetSdk.',
@@ -519,16 +574,17 @@ Play Console shows:
 Your app currently targets API level 34 and must target at least API level 36 to ensure that it is built on the latest APIs optimized for security and performance.
 \`\`\`
 
-**The rule in 2026.** Since 31 August 2026, new apps and app updates must target Android 16 (API level 36). Existing apps must target at least Android 15 (API level 35) to stay available to new users on newer Android versions. Apps that requested an extension have until 1 November 2026.
+**The rule in 2026.** Since 31 August 2026, new apps and app updates must target Android 16 (API level 36). Existing apps must target at least Android 15 (API level 35) to stay available to new users on newer Android versions. Apps that requested an extension have until 1 November 2026; after that, updates need API 36.
 
 **How to fix it in React Native.** Set \`targetSdkVersion = 36\` and \`compileSdkVersion = 36\` in \`android/build.gradle\` (Expo: use the SDK that targets it, or \`expo-build-properties\`). Then check what changes with each API level you skip:
 
 - Target 31: components with an intent filter need \`android:exported\`, or the build fails ([details](/fix/android-exported)).
 - Target 34: foreground services must declare their type, or the app crashes when one starts ([details](/fix/missing-foreground-service-type)).
 - Target 35: the app is drawn edge-to-edge on Android 15, so screens using React Native's own \`SafeAreaView\` slide under the status bar ([details](/fix/imagebackground-safeareaview-deprecated)).
+- Target 36: on Android 16 the edge-to-edge opt-out (\`windowOptOutEdgeToEdgeEnforcement\`) is ignored, so screens that relied on it slide under the system bars. On screens at least 600dp wide (tablets, foldables), \`screenOrientation\`, \`resizeableActivity="false"\` and aspect ratio limits are ignored too: the app rotates and resizes. Predictive back is on by default, and \`onBackPressed\` is no longer called; test the back button and gesture.
 
 **Check your app first.** \`npx nativekeel\` reports the target SDK problem and each of these follow-on issues, and its upgrade plan orders them.`,
-    sources: [['Google Play target API level requirements', 'https://support.google.com/googleplay/android-developer/answer/11926878']],
+    sources: [['Android 16 behavior changes for apps targeting API 36', 'https://developer.android.com/about/versions/16/behavior-changes-16'], ['Google Play target API level requirements', 'https://support.google.com/googleplay/android-developer/answer/11926878']],
   },
   {
     slug: 'google-play-16-kb-page-size',
@@ -591,6 +647,7 @@ Build with \`./gradlew bundleRelease\` and upload the \`.aab\`. With Play App Si
   },
   {
     slug: 'uiscene-life-cycle-required-xcode-27',
+    updated: '2026-10-17',
     error: 'UIScene life cycle is required for apps built with this SDK',
     title: 'Xcode 27 "UIScene life cycle is required": React Native fix',
     description: 'Why a React Native or Expo app stops at launch when built with Xcode 27 and the iOS 27 SDK, the April 2027 App Store deadline, and how to adopt UIScene.',
@@ -605,7 +662,7 @@ Apple announced it in TN3187: from the first major release after iOS 26, buildin
 
 **Have you adopted it?** You have if your \`Info.plist\` has a \`UIApplicationSceneManifest\` with scene configurations, or your app delegate implements \`application(_:configurationForConnecting:options:)\`. A manifest that only sets \`UIApplicationSupportsMultipleScenes\` does not count.
 
-**React Native.** 0.88 is the first release whose template adopts it. Its \`SceneDelegate.swift\` starts React Native in the window scene, and \`Info.plist\` names it in the scene manifest. React Native 0.87 and earlier have no scene support in the template. Upgrade, then copy both from the Upgrade Helper.
+**React Native.** 0.88 (stable since 15 October 2026) is the first release that supports it: \`RCTReactNativeFactory\` gains SceneDelegate entry points (\`startReactNativeWithModuleName:inWindow:connectionOptions:\`), limited to a single scene, so keep \`UIApplicationSupportsMultipleScenes\` false. Its template adopts it. Its \`SceneDelegate.swift\` starts React Native in the window scene, and \`Info.plist\` names it in the scene manifest. React Native 0.87 and earlier have no scene support in the template. Upgrade, then copy both from the Upgrade Helper.
 
 **Expo.** On SDK 57, opt in with expo 57.0.23+ and expo-build-properties 57.0.20+:
 
@@ -621,7 +678,7 @@ Then run prebuild again. SDK 58 has it by default. SDK 56 and earlier need an up
 - **Libraries that read the window from the app delegate crash.** The 0.88 template's \`AppDelegate\` has no \`window\`. We reproduced \`-[AppDelegate window]: unrecognized selector sent to instance\` on that template with react-native-blob-util and react-native-google-mobile-ads, and the same Objective-C call is in about a dozen popular packages, including @react-native-firebase/messaging at launch. Until they are fixed, keep \`var window: UIWindow?\` in \`AppDelegate\` and set it from \`SceneDelegate\`. [Which libraries, and their fixes](/fix/appdelegate-window-unrecognized-selector).
 
 **How common it is.** 583 of the 628 open-source React Native and Expo apps with an iOS target in our scan (11 October 2026) have not adopted it yet. \`npx nativekeel\` reports it, the links that still go to \`AppDelegate\`, and the installed libraries that read the app delegate's window. A longer walkthrough, with the 15 libraries that crash after the move and the deep-link pitfall, is on [dev.to](https://dev.to/keel_alican_akyol/xcode-27-wont-launch-93-of-react-native-apps-the-uiscene-change-and-the-libraries-that-crash-2gb5).`,
-    sources: [
+    sources: [['React Native 0.88 release notes: SceneDelegate support', 'https://reactnative.dev/blog/2026/10/19/react-native-0.88#ios-scenedelegate-support'], 
       ['Apple TN3187: Migrating to the UIKit scene-based life cycle', 'https://developer.apple.com/documentation/technotes/tn3187-migrating-to-the-uikit-scene-based-life-cycle'],
       ['Apple: upcoming App Store requirements (iOS 27 SDK from April 2027)', 'https://developer.apple.com/news/?id=k1mtkt1k'],
       ['React Native 0.88 template: SceneDelegate.swift', 'https://github.com/react-native-community/template/blob/0.88-stable/template/ios/HelloWorld/SceneDelegate.swift'],

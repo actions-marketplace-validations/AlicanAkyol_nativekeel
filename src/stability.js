@@ -1,4 +1,5 @@
 import fs from './read-boundary.js';
+import { renderLoops } from './render-loops.js';
 import { upcomingFinding } from './upcoming.js';
 import path from 'node:path';
 import { cleanVersion, findPackageDir, installedVersion, versionFromSpec } from './project.js';
@@ -197,6 +198,8 @@ export function stabilityChecks(project) {
     }
   }
 
+  // State updates that run on every render.
+  for (const f of renderLoops(project)) add(f);
   return findings;
 }
 
@@ -334,13 +337,14 @@ const REMOVED_FROM_CORE = {
 // Removed later than the rest (0.72/0.74); before that version the upcoming-changes check covers them.
 const REMOVED_IN = { InteractionManager: 87 };
 const REMOVED_PROP_TYPES = ['ViewPropTypes', 'ColorPropType', 'EdgeInsetsPropType', 'PointPropType'];
-// Deprecated in core and announced for removal (RN index.js warnOnce, checked 0.78-0.87).
+// Deprecated in core and announced for removal (RN index.js warnOnce, checked 0.78-0.88).
 // They still work; moving now avoids a crash when they are removed.
 const DEPRECATED_IN_CORE = {
   SafeAreaView: { since: 81, use: 'react-native-safe-area-context' },
   ImageBackground: { since: 87, use: 'a View with an absolutely positioned Image' },
   DrawerLayoutAndroid: { since: 87, use: 'react-native-drawer-layout' },
   UTFSequence: { since: 87, use: "Unicode escapes written directly (e.g. '\\ufeff')" },
+  InputAccessoryView: { since: 88, use: "react-native-keyboard-controller's KeyboardStickyView" },
 };
 
 export function removedCoreImports(project) {

@@ -40,6 +40,53 @@ h1{font-size:30px;margin:0 0 4px}a{color:var(--accent)}p,li{color:var(--muted)}
 <h1>What's new</h1>
 <p>Every release, in plain words. Most changes come from two places: real upgrades we do, and scanning 850+ open-source React Native and Expo apps, more every week, to find what the tool gets wrong. Run <code>npx nativekeel</code> to always get the latest. Full notes on <a href="https://github.com/AlicanAkyol/nativekeel/releases">GitHub</a>.</p>
 
+<div class="rel"><h2>0.1.100</h2><p class="date">18 October 2026</p>
+<ul>
+<li><span class="tag">AI agents</span><b>Clearer MCP tools.</b> Every parameter of the eight MCP tools now says what it does and its default, <code>upgrade_plan</code> describes what the plan contains, and every tool carries the standard MCP annotations (read-only, non-destructive, idempotent, and whether it uses the network), which agents and registries use to decide when to call it.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.99</h2><p class="date">18 October 2026</p>
+<ul>
+<li><span class="tag">Security</span><b>Backend admin credentials inside the app.</b> A key that bypasses your backend's own access rules lets anyone who unpacks the app read or change every user's data. NativeKeel now reports, when the app reads them through <code>EXPO_PUBLIC_</code>, react-native-config or react-native-dotenv (which compile the value in): the Supabase <code>service_role</code> key, a Hasura admin secret, Firebase service account keys, database passwords, the Stripe secret key, Appwrite API keys, PocketBase superuser passwords and JWT signing secrets. Also: server-only SDKs (<code>firebase-admin</code>, <code>pg</code>, <code>mongodb</code>, <code>stripe</code>, …) imported by files that are certainly app code, and database connection strings with a password or Hasura admin secrets written in the code. Tuned on 1,040 open-source apps: names that are usually public (<code>FIREBASE_DATABASE_URL</code>), server services in the same repository and placeholder passwords are left out.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.98</h2><p class="date">18 October 2026</p>
+<ul>
+<li><span class="tag">Fewer false alarms</span><b>React header imports in your own app code are no longer reported.</b> The React Native 0.87 header check also flagged <code>#import &lt;RCTAppDelegate.h&gt;</code> in an app's own AppDelegate or bridging header. We compiled those forms in the app target of a 0.87.1 app: they still resolve there. Only libraries, which CocoaPods builds as separate targets, fail. Found while checking two open-source apps on 0.87.1 that build fine and were wrongly flagged.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.97</h2><p class="date">18 October 2026</p>
+<ul>
+<li><span class="tag">New check</span><b>Render loops.</b> State updates that run on every render freeze the screen and end in "Too many re-renders" or "Maximum update depth exceeded". NativeKeel now finds the three patterns behind them, with file and line: a handler called instead of passed (<code>onPress={setOpen(true)}</code>), an effect with no dependency array that sets a new value, and an effect that changes the state it depends on. Guarded, constant and asynchronous updates are left alone. <code>nativekeel explain</code> recognises both messages. <a href="/fix/maximum-update-depth-exceeded-react-native">Fix page</a>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.96</h2><p class="date">18 October 2026</p>
+<ul>
+<li><span class="tag">Expo</span><b>React Native that does not match the Expo SDK.</b> An Expo SDK's native modules are built against one React Native minor; a different one is a common cause of build failures and launch crashes. NativeKeel now compares them (found in an app with Expo 58 and React Native 0.87, where the SDK expects 0.88), and says when the installed <code>expo</code> still pins a release candidate. The informational line about React Native and the Expo SDK no longer claims they match.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.95</h2><p class="date">18 October 2026</p>
+<ul>
+<li><span class="tag">Google Play</span><b>What changes at API 36 (Android 16).</b> Google Play requires API 36 for updates since 31 August 2026, and the extension ends on 1 November. NativeKeel now reports an edge-to-edge opt-out (<code>windowOptOutEdgeToEdgeEnforcement</code>) that Android 16 ignores, so screens slide under the system bars, and notes the orientation and aspect ratio locks that tablets and foldables ignore. Games are exempt; the temporary resizability opt-out is mentioned. <a href="/fix/google-play-target-api-level">Target API level page</a> updated with the API 36 changes.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.94</h2><p class="date">17 October 2026</p>
+<ul>
+<li><span class="tag">Teams</span><b>Team panel, closed beta.</b> With <code>--upload</code> and a team token, each scan (or <code>fleet</code> run) sends a summary to your team's page: every app's grades, what changed since the scan before, a trend over the last scans, deadlines and finding titles. No source code and no finding details are sent, and <code>--upload</code> never works with <code>--offline</code>. The GitHub Action takes a <code>panel-token</code> input, and the monthly organization workflow uploads when a <code>NATIVEKEEL_TOKEN</code> secret is set. <a href="/panel-demo">Live demo</a> · <a href="/teams">join the beta</a>. What is stored: <a href="/privacy">privacy</a>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.93</h2><p class="date">17 October 2026</p>
+<ul>
+<li><span class="tag">SonarQube</span><b>NativeKeel findings inside SonarQube.</b> <code>npx nativekeel --sonar nativekeel-sonar.json</code> writes SonarQube's generic issue format; the scanner reads it with <code>sonar.externalIssuesReportPaths</code>. Security findings arrive as vulnerabilities, store rules and crash risks as bugs, the rest as code smells, each on its file and line, in the same project and quality gate as the rest of your code. The GitHub Action has a <code>sonar</code> input. Tested end to end on SonarQube Community Build 26.10. <a href="/sonarqube">How to set it up</a>.</li>
+</ul></div>
+
+<div class="rel"><h2>0.1.92</h2><p class="date">17 October 2026</p>
+<ul>
+<li><span class="tag">React Native 0.88</span>React Native 0.88 and Expo SDK 58 are stable, and reports now say so. The Xcode 27 / UIScene finding names the official 0.88 path: the new SceneDelegate entry points in <code>RCTReactNativeFactory</code>, forwarding links to <code>RCTLinkingManager</code>, one scene only. <a href="/fix/uiscene-life-cycle-required-xcode-27">Updated fix page</a>.</li>
+<li><span class="tag">Teams</span><b>Every app in a GitHub organization, monthly.</b> A ready-made workflow (<a href="https://github.com/AlicanAkyol/nativekeel/blob/main/examples/fleet-workflow.yml">examples/fleet-workflow.yml</a>) clones the organization's repositories on the GitHub runner, runs <code>fleet</code>, compares with last month and writes the table to the run summary. Tested on GitHub with three public apps.</li>
+<li><span class="tag">Deprecated</span><code>InputAccessoryView</code> is deprecated in 0.88 and warns once on import; the report points to react-native-keyboard-controller's <code>KeyboardStickyView</code>.</li>
+</ul></div>
+
 <div class="rel"><h2>0.1.91</h2><p class="date">17 October 2026</p>
 <ul>
 <li><span class="tag">Fleet</span><b>What changed since last month.</b> Keep a run with <code>npx nativekeel fleet ~/clients --json &gt; fleet-2026-10.json</code>; next time, <code>--base fleet-2026-10.json</code> shows per app what changed ("Security D→B, critical 2→0"), which apps are new and which are gone, in the terminal, the HTML page and Markdown. Nothing is stored anywhere but the file you keep.</li>
