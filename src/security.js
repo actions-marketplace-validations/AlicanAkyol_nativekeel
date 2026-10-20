@@ -36,6 +36,11 @@ const read = (file) => {
 };
 
 const SERVER_ONLY = /node\.?js|server[- ]side|\bhttp adapter\b|\bhttp\/2\b|\bssr\b|\bssrf\b|no_proxy|proxy-authorization|config\.proxy|\bproxy is re-evaluated|cloud metadata|formDataToStream/i;
+// Advisories whose own text says they affect server-side use only, while the title does not (npm's
+// bulk endpoint returns titles, not descriptions). moment.locale() path traversal loads locale files
+// with require() on Node; Metro bundles locales at build time.
+const SERVER_ONLY_IDS = new Set(['GHSA-8hfj-j24r-96c4', 'GHSA-4p3w-j4w9-5jqw']);
+const serverOnly = (a) => SERVER_ONLY.test(a.title || '') || SERVER_ONLY_IDS.has(String(a.url || '').split('/').pop());
 const SEVERITY = { critical: 'critical', high: 'high', moderate: 'medium', low: 'low', info: 'low' };
 const RANK = ['low', 'medium', 'high', 'critical'];
 
@@ -54,9 +59,9 @@ export async function vulnerableDependencies(registry, versions, latestOf = {}) 
     if (!relevant.length) continue;
     // Advisories about Node.js-only code paths (axios' HTTP adapter, server rendering) do not
     // reach a React Native app: keep them visible, but at low severity.
-    const sevOf = (a) => (SERVER_ONLY.test(a.title || '') ? 'low' : SEVERITY[a.severity] || 'low');
+    const sevOf = (a) => (serverOnly(a) ? 'low' : SEVERITY[a.severity] || 'low');
     const severity = relevant.map(sevOf).sort((a, b) => RANK.indexOf(b) - RANK.indexOf(a))[0];
-    const serverOnly = relevant.filter((a) => SERVER_ONLY.test(a.title || '')).length;
+    const serverOnlyCount = relevant.filter(serverOnly).length;
     let fixedIn = minimumFixed(relevant);
     // Compare with what is published: "<=2.0.2" when 2.0.2 is the latest release means no fix exists.
     const newest = latestOf[name];
@@ -78,8 +83,8 @@ export async function vulnerableDependencies(registry, versions, latestOf = {}) 
       id: `vuln:${name}`,
       severity,
       area: 'security',
-      title: `${name} ${version}: ${relevant.length - serverOnly || relevant.length} known vulnerabilit${(relevant.length - serverOnly || relevant.length) === 1 ? 'y' : 'ies'}${serverOnly && serverOnly < relevant.length ? ` (+${serverOnly} for Node.js only)` : ''}${fixedIn ? ` (fixed in ${fixedIn})` : noFix ? ' (no fixed release)' : ''}`,
-      detail: `${top.join('; ')}${relevant.length > 3 ? `; and ${relevant.length - 3} more` : ''}. ${fixedIn ? `Fixed in ${fixedIn}${fixedIn.startsWith('a release') ? '' : ' or later'}.` : noFix ? `No fixed release exists yet (the latest is ${newest}): replace it, or make sure it never handles untrusted input.` : 'Check the advisories for a fixed version.'}${serverOnly ? ` ${serverOnly} of them concern Node.js/server use only and are counted as low.` : ''} Source: GitHub Advisory Database (via npm).`,
+      title: `${name} ${version}: ${relevant.length - serverOnlyCount || relevant.length} known vulnerabilit${(relevant.length - serverOnlyCount || relevant.length) === 1 ? 'y' : 'ies'}${serverOnlyCount && serverOnlyCount < relevant.length ? ` (+${serverOnlyCount} for Node.js only)` : ''}${fixedIn ? ` (fixed in ${fixedIn})` : noFix ? ' (no fixed release)' : ''}`,
+      detail: `${top.join('; ')}${relevant.length > 3 ? `; and ${relevant.length - 3} more` : ''}. ${fixedIn ? `Fixed in ${fixedIn}${fixedIn.startsWith('a release') ? '' : ' or later'}.` : noFix ? `No fixed release exists yet (the latest is ${newest}): replace it, or make sure it never handles untrusted input.` : 'Check the advisories for a fixed version.'}${serverOnlyCount ? ` ${serverOnlyCount} of them concern Node.js/server use only and are counted as low.` : ''} Source: GitHub Advisory Database (via npm).`,
       fix: { kind: 'vuln-dep', name, from: version, to: fixedIn, noFix, latest: newest || null, severity },
     });
   }
@@ -770,7 +775,10 @@ export function masvsOf(id) {
   if (/^(clipboard-|keychain-)/.test(id)) return 'STORAGE';
   if (/^(password-leak|token-unencrypted|android-allow-backup|log-sensitive)/.test(id)) return 'STORAGE';
   if (/^(insecure-tls|user-certificates|plain-http|ios-ats|android-cleartext)/.test(id)) return 'NETWORK';
-  if (/^(webview-|android-exported|deeplink-)/.test(id)) return 'PLATFORM';
+  if (/^(webview-|android-exported|deeplink-|url-checked-as-text)/.test(id)) return 'PLATFORM';
+  if (/^client-writes-privilege/.test(id)) return 'AUTH';
+  if (/^token-sent-to-every-host/.test(id)) return 'NETWORK';
+  if (/^ci-/.test(id)) return 'CODE';
   if (/^(firebase-|supabase-)/.test(id)) return 'AUTH';
   if (/^(vuln:|signing-|android-debuggable|malicious-code|vscode-autorun)/.test(id)) return 'CODE';
   if (/^(sourcemap-in-app|easy-reverse-engineering)/.test(id)) return 'RESILIENCE';
@@ -1072,6 +1080,13 @@ const BACKEND_ADMIN_NAMES = [
   [/APPWRITE\w*(?:API_KEY|SECRET)/, 'Appwrite API key', 'is a server key with the scopes you gave it, outside user permissions', 'high'],
   [/POCKETBASE\w*(?:ADMIN|SUPERUSER)\w*PASSWORD/, 'PocketBase superuser password', 'logs in as a superuser, past every collection rule', 'critical'],
   [/^(?:\w+_)?JWT_SECRET$/, 'JWT signing secret', 'lets anyone sign valid tokens for any user', 'critical'],
+  [/AWS\w*SECRET(?:_ACCESS)?_KEY/, 'AWS secret access key', 'acts as the IAM user with every permission it has', 'critical'],
+  [/CLOUDINARY\w*(?:API_)?SECRET/, 'Cloudinary API secret', 'can upload, overwrite and delete every file in the account', 'high'],
+  [/TWILIO\w*AUTH_TOKEN/, 'Twilio auth token', 'sends messages and places calls billed to your account', 'high'],
+  [/SENDGRID\w*API_KEY|RESEND\w*API_KEY|MAILGUN\w*API_KEY|POSTMARK\w*(?:SERVER_)?TOKEN/, 'Email API key', 'sends email as your domain, to anyone', 'high'],
+  // Any other name that says it is a server secret. Last, so the specific labels win.
+  // Singular's SDK secret and Adjust's app secret are designed to live in the app.
+  [/^(?!\w*(?:SINGULAR|ADJUST))(?:\w+_)?(?:SECRET|SECRET_KEY|CLIENT_SECRET|API_SECRET|PRIVATE_KEY|ADMIN_KEY)$/, 'Server secret', 'is named as a secret meant to stay on a server', 'high'],
 ];
 const SERVER_SDKS = [
   ['firebase-admin', 'firebase-admin (Admin SDK: ignores security rules; needs a service account)'],
