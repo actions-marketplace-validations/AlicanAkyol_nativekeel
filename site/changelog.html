@@ -40,6 +40,18 @@ h1{font-size:30px;margin:0 0 4px}a{color:var(--accent)}p,li{color:var(--muted)}
 <h1>What's new</h1>
 <p>Every release, in plain words. Most changes come from two places: real upgrades we do, and scanning 850+ open-source React Native and Expo apps, more every week, to find what the tool gets wrong. Run <code>npx nativekeel</code> to always get the latest. Full notes on <a href="https://github.com/AlicanAkyol/nativekeel/releases">GitHub</a>.</p>
 
+<div class="rel"><h2>0.1.127</h2><p class="date">24 October 2026</p>
+<p>Your code can be clean and the upgrade still break, because a library you depend on calls something React Native removed.</p>
+<ul>
+<li><span class="tag">Upgrade</span><b>Libraries that still call removed APIs.</b> <code>npx nativekeel upgrade</code> now reads your installed dependencies for <code>InteractionManager</code> (removed in 0.87: a crash), the <code>StatusBar</code> setters (0.87: a crash) and <code>StyleSheet.absoluteFillObject</code> (0.85: layouts break silently), and reports each library as a blocker of its own. Without <code>node_modules</code> it uses releases checked by hand: react-native-modal, react-native-draggable-flatlist 4.0.3, moti, React Native Elements, UI Kitten and NativeBase 3. On 1,162 open-source projects this changes the verdict for 24 apps whose own code was clean. A library's own copy of an API (a web shim) and calls guarded by a check are not counted.</li>
+<li><span class="tag">Help</span><b>When you would rather hand it over.</b> The upgrade verdict, the fix pages and the HTML report (unbranded, and only with a store deadline) say how to ask for a fixed quote. Reports made with <code>--brand</code> never carry it.</li>
+</ul></div>
+<div class="rel"><h2>0.1.126</h2><p class="date">23 October 2026</p>
+<p>Expo SDK 58 upgrades, covered more completely.</p>
+<ul>
+<li><span class="tag">Upgrade</span><b>Expo Router SDK 58 changes in your code.</b> <code>npx nativekeel upgrade</code> now reports <code>initialRouteName</code> (removed, in <code>unstable_settings</code> and on layout navigators), <code>beforeRemove</code> listeners that stop firing, <code>freezeOnBlur</code> that has no effect, and the removed <code>redirect</code> / <code>initialParams</code> screen props, each with file and line, from Expo's official migration guide. They apply only to apps that use Expo Router: plain React Navigation keeps them. Of 401 open-source apps on Expo Router below SDK 58, 78 set <code>initialRouteName</code>. None of these show an error after the upgrade, so they are listed as behaviour changes to review.</li>
+<li><span class="tag">Guides</span><b><a href="/fix/expo-router-sdk-58-initialroutename-freezeonblur-beforeremove">Expo Router SDK 58: initialRouteName, freezeOnBlur and beforeRemove</a></b> and <b><a href="/fix/expo-file-system-file-write-async-sdk-58">expo-file-system File.write() is async in SDK 58</a></b>: it still compiles without <code>await</code>, but reads can race the write and <code>try/catch</code> no longer sees write errors. Checked against the SDK 58 notes, the migration guide and the package's types; linked from the findings.</li>
+</ul></div>
 <div class="rel"><h2>0.1.125</h2><p class="date">23 October 2026</p>
 <p>A guide for the second most common upgrade blocker we measured.</p>
 <ul>
